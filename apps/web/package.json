@@ -1,0 +1,36 @@
+{
+  "name": "@tavern-chat/web",
+  "version": "0.1.0",
+  "description": "TavernChat 极简多端前端（Web / Android Capacitor APK / Electron 桌面端共享）",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "rspack serve -c rspack.config.ts",
+    "build": "node -e \"import('node:fs').then(fs => fs.rmSync('dist', { recursive: true, force: true }))\" && node -e \"import('node:child_process').then(cp => process.exit(cp.spawnSync('rspack', ['build', '-c', 'rspack.config.ts'], { stdio: 'inherit', shell: true, env: { ...process.env, NODE_ENV: 'production' } }).status ?? 1))\"",
+    "type": "tsc -p tsconfig.json",
+    "apk:sync": "npm run build && cap sync android",
+    "apk:debug": "npm run apk:sync && cd android && gradlew.bat assembleDebug && cd .. && node -e \"import('node:fs').then(fs => { fs.mkdirSync('release', { recursive: true }); fs.copyFileSync('android/app/build/outputs/apk/debug/app-debug.apk', 'release/TavernChat-0.1.0-android-debug.apk') })\""
+  },
+  "dependencies": {
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.2",
+    "@tavern-chat/core": "workspace:*",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.0",
+    "clsx": "2.1.1",
+    "idb": "8.0.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zustand": "4.4.7"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/cli": "^8.6.2",
+    "@rspack/cli": "2.0.2",
+    "@rspack/core": "2.0.2",
+    "@rspack/dev-server": "2.0.1",
+    "@swc/helpers": "0.5.23",
+    "@types/node": "~20.9.2",
+    "typescript": "7.0.2"
+  }
+}

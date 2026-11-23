@@ -1,0 +1,18 @@
+{
+  "name": "@tavern-chat/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TavernChat 电脑端（Electron 壳 + 内嵌超轻本地微网关，预留 PC 满血版扩展插槽）",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "type": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "electron": "^45.3.3",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "typescript": "7.0.2"
+  }
+}

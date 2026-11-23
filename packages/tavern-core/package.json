@@ -1,0 +1,17 @@
+{
+  "name": "@tavern-chat/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "type": "tsc -p tsconfig.json",
+    "test": "node --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "~22.15.0",
+    "typescript": "7.0.2"
+  }
+}

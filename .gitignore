@@ -1,0 +1,10 @@
+node_modules/
+dist/
+release/
+web-dist/
+ref/
+.DS_Store
+*.log
+*.tmp
+apps/web/android/app/build/
+apps/web/android/.gradle/

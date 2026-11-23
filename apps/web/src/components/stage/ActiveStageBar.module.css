@@ -1,0 +1,143 @@
+.bar {
+  height: 52px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+.title:hover {
+  background: var(--bg-hover);
+}
+
+.titleInput {
+  height: 30px;
+  max-width: 280px;
+  width: 100%;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--bg-elevated);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.titleInput:focus {
+  outline: none;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.iconBtn {
+  height: 32px;
+  min-width: 32px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12.5px;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+
+.iconBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.iconBtnActive {
+  background: var(--accent-soft);
+  border-color: var(--kind-char-border);
+  color: var(--accent);
+}
+
+.drawerBtn {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+
+.drawerBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+
+.drawerBtnActive {
+  background: var(--accent-soft);
+  border-color: var(--kind-char-border);
+  color: var(--accent);
+}
+
+.countBadge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 819px) {
+  .bar {
+    height: 56px;
+    padding: 4px 10px 0;
+  }
+
+  .iconBtn {
+    height: 38px;
+    min-width: 38px;
+  }
+
+  .drawerBtn {
+    height: 36px;
+  }
+}
