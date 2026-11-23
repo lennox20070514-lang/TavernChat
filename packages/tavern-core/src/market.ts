@@ -1,4 +1,4 @@
-/** 需要站点账号的来源插件使用的登录接口配置。 */
+/** 需要站点账号的来源使用的登录接口配置。 */
 export type MarketAuthConfig = {
   origin: string
   loginPath: string
@@ -8,7 +8,7 @@ export type MarketAuthConfig = {
   logoutPath: string
 }
 
-/** 市场接入的单位是“来源插件”，不是单张卡片；卡片由插件目录提供。 */
+/** 市场接入的单位是“来源”，不是单张卡片；卡片由插件目录提供。 */
 export type MarketplacePlugin = {
   id: string
   name: string
@@ -30,7 +30,7 @@ export type MarketplacePlugin = {
 }
 
 /**
- * 内置来源插件。
+ * 内置来源。
  * 默认免费，后续新增付费来源时不需要改动卡片或对话逻辑。
  */
 export const BUILTIN_MARKET_PLUGINS: MarketplacePlugin[] = [
@@ -69,7 +69,7 @@ export const BUILTIN_MARKET_PLUGINS: MarketplacePlugin[] = [
     homepage: 'https://chat.xstavern.com/market',
     license: '以站点与作者说明为准',
     catalogUrl:
-      'https://chat.xstavern.com/api/marketplace.php?action=list&page=1&origin=original&sort=popular',
+      'https://chat.xstavern.com/api/marketplace.php?action=list&page=1&sort=popular&limit=60',
     hosts: ['chat.xstavern.com'],
     allowedPathPrefixes: [
       '/api/marketplace.php',
@@ -109,10 +109,20 @@ export type MarketCard = {
   tags: string[]
   license?: string
   licenseUrl?: string
+  /** 来源提供的较长简介，详情页优先展示 */
+  summary?: string
+  /** 来源里的系列/合集名 */
+  series?: string
+  /** 来源里的分类名 */
+  category?: string
+  downloadCount?: number
+  rating?: number
+  ratingCount?: number
+  createdAt?: string
 }
 
 /**
- * 外部插件清单格式：托管在支持 CORS 的 HTTPS 地址（例如 GitHub raw）。
+ * 外部来源清单格式：托管在支持 CORS 的 HTTPS 地址（例如 GitHub raw）。
  * 清单只描述卡片，不执行远程代码。
  */
 export type MarketManifest = {
@@ -134,7 +144,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const cleanString = (value: unknown, field: string): string => {
   if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error('插件清单字段缺失：' + field)
+    throw new Error('来源清单字段缺失：' + field)
   }
   return value.trim()
 }
@@ -148,10 +158,10 @@ const httpsUrl = (value: unknown, field: string): string => {
   try {
     url = new URL(raw)
   } catch {
-    throw new Error('插件清单字段不是有效 URL：' + field)
+    throw new Error('来源清单字段不是有效 URL：' + field)
   }
   if (url.protocol !== 'https:') {
-    throw new Error('插件清单只允许 HTTPS 地址：' + field)
+    throw new Error('来源清单只允许 HTTPS 地址：' + field)
   }
   return url.toString()
 }
@@ -164,19 +174,19 @@ const stringList = (value: unknown): string[] =>
     ? value.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean).slice(0, 24)
     : []
 
-/** 校验外部插件清单，避免插件市场被坏数据拖垮。 */
+/** 校验外部来源清单，避免卡牌库被坏数据拖垮。 */
 export function parseMarketManifest(value: unknown): MarketManifest {
-  if (!isRecord(value)) throw new Error('插件清单必须是 JSON 对象')
-  if (value.schema !== 1) throw new Error('插件清单版本不受支持（需要 schema: 1）')
-  if (!Array.isArray(value.cards)) throw new Error('插件清单缺少 cards 数组')
-  if (value.cards.length === 0) throw new Error('插件清单里没有卡片')
+  if (!isRecord(value)) throw new Error('来源清单必须是 JSON 对象')
+  if (value.schema !== 1) throw new Error('来源清单版本不受支持（需要 schema: 1）')
+  if (!Array.isArray(value.cards)) throw new Error('来源清单缺少 cards 数组')
+  if (value.cards.length === 0) throw new Error('来源清单里没有卡片')
   if (value.cards.length > 500) throw new Error('单个插件最多允许 500 张卡片')
 
   const seen = new Set<string>()
   const cards = value.cards.map((raw, index) => {
     if (!isRecord(raw)) throw new Error(`第 ${index + 1} 张卡片格式无效`)
     const id = cleanString(raw.id, `cards[${index}].id`)
-    if (seen.has(id)) throw new Error('插件清单存在重复卡片 id：' + id)
+    if (seen.has(id)) throw new Error('来源清单存在重复卡片 id：' + id)
     seen.add(id)
     const fileName = cleanString(raw.fileName, `cards[${index}].fileName`)
     const kindValue = optionalString(raw.kind) ?? 'character'

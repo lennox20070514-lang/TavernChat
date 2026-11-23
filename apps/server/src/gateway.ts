@@ -371,8 +371,8 @@ const readBodyWithLimit = async (body: ReadableStream<Uint8Array>, limit: number
 }
 
 /**
- * 把内置来源插件页面/卡片代理给浏览器和桌面端，解决 CORS。
- * 只放行插件清单登记过的主机和路径，禁止重定向，限制大小与超时。
+ * 把内置来源页面/卡片代理给浏览器和桌面端，解决 CORS。
+ * 只放行来源清单登记过的主机和路径，禁止重定向，限制大小与超时。
  */
 export const handleMarketProxy = async (req: IncomingMessage, res: ServerResponse) => {
   let body: JsonRecord
@@ -403,7 +403,7 @@ export const handleMarketProxy = async (req: IncomingMessage, res: ServerRespons
       entry.allowedPathPrefixes.some((prefix) => target.pathname.startsWith(prefix))
   )
   if (target.protocol !== 'https:' || !plugin) {
-    sendJson(res, 403, { error: '该地址不属于已接入的来源插件' })
+    sendJson(res, 403, { error: '该地址不属于已接入的来源' })
     return
   }
   const session = plugin.auth ? await getMarketSession(plugin.id) : undefined
@@ -446,7 +446,9 @@ export const handleMarketProxy = async (req: IncomingMessage, res: ServerRespons
 
     const contentType = upstream.headers.get('content-type') ?? ''
     const jsonResponse =
-      /application\/json|text\/json/i.test(contentType) || /\.json$/i.test(target.pathname)
+      /application\/json|text\/json/i.test(contentType) ||
+      /\.json$/i.test(target.pathname) ||
+      /^\/api\/resources\/[^/]+\/download$/i.test(target.pathname)
     if (!jsonResponse && !/image\/png/i.test(contentType)) {
       await upstream.body.cancel()
       sendJson(res, 502, { error: '来源没有返回 PNG 或 JSON 角色卡' })
@@ -487,6 +489,58 @@ export const handleMarketProxy = async (req: IncomingMessage, res: ServerRespons
     if (!res.writableEnded) {
       sendJson(res, 502, {
         error: '读取来源失败：' + (err instanceof Error ? err.message : String(err)),
+      })
+    }
+  }
+}
+
+const MARKET_IMAGE_LIMIT = 8 * 1024 * 1024
+
+/** 像素酒馆的预览图要求 Origin/Referer，通过本地网关代理给浏览器。 */
+export const handleMarketImage = async (req: IncomingMessage, res: ServerResponse) => {
+  const reqUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
+  const rawUrl = reqUrl.searchParams.get('url') ?? ''
+  let target: URL
+  try {
+    target = new URL(rawUrl)
+  } catch {
+    sendJson(res, 400, { error: '图片地址无效' })
+    return
+  }
+  const allowed =
+    target.protocol === 'https:' &&
+    target.hostname === 'images.xstavern.com' &&
+    (target.pathname.startsWith('/thumbs/') || target.pathname.startsWith('/originals/'))
+  if (!allowed) {
+    sendJson(res, 403, { error: '图片地址不在受支持的来源范围内' })
+    return
+  }
+  try {
+    const upstream = await fetch(target, {
+      headers: {
+        Origin: 'https://chat.xstavern.com',
+        Referer: 'https://chat.xstavern.com/',
+        Accept: 'image/webp,image/*,*/*;q=0.8',
+      },
+      signal: AbortSignal.timeout(30_000),
+      redirect: 'error',
+    })
+    if (!upstream.ok || !upstream.body) {
+      sendJson(res, 502, { error: '图片来源返回 HTTP ' + upstream.status })
+      return
+    }
+    const buffer = await readBodyWithLimit(upstream.body, MARKET_IMAGE_LIMIT)
+    res.writeHead(200, {
+      'Content-Type': upstream.headers.get('content-type') || 'image/webp',
+      'Content-Length': String(buffer.byteLength),
+      'Cache-Control': 'public, max-age=3600',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    res.end(buffer)
+  } catch (err) {
+    if (!res.writableEnded) {
+      sendJson(res, 502, {
+        error: '读取预览图失败：' + (err instanceof Error ? err.message : String(err)),
       })
     }
   }
@@ -812,6 +866,10 @@ export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') =>
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/models') {
         await handleModelsProxy(req, res)
+        return
+      }
+      if (req.method === 'GET' && reqUrl.pathname === '/api/v1/market/image') {
+        await handleMarketImage(req, res)
         return
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/market/auth/login') {

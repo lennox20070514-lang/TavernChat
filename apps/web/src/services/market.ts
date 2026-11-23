@@ -42,7 +42,10 @@ const CARDS_CACHE_MS = 2 * 60 * 1000
 const MAX_MANIFESTS = 20
 
 const PIXEL_TAVERN_API = 'https://chat.xstavern.com/api/marketplace.php'
+const PIXEL_TAVERN_RESOURCES = 'https://chat.xstavern.com/api/resources'
 const PIXEL_TAVERN_PAGES = 5
+const PIXEL_TAVERN_LIMIT = 60
+const PIXEL_TAVERN_RESOURCE_PAGES = 2
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -297,27 +300,61 @@ const readNativeCookie = (pluginId: string): string | undefined => {
   }
 }
 
-const loadPixelTavernCards = async (
+const mapPixelCard = (
   plugin: MarketplacePlugin,
-  customOrigin?: string
-): Promise<MarketCard[]> => {
-  const cookie = readNativeCookie(plugin.id)
-  const settled = await Promise.allSettled(
-    Array.from({ length: PIXEL_TAVERN_PAGES }, (_, index) =>
-      requestText(
-        `${PIXEL_TAVERN_API}?action=list&page=${index + 1}&origin=original&sort=popular`,
-        true,
-        customOrigin,
-        cookie
-      )
-    )
-  )
+  raw: Record<string, unknown>,
+  gateway: string | null
+): MarketCard | null => {
+  const slug = typeof raw.slug === 'string' ? raw.slug : ''
+  const name = typeof raw.name === 'string' ? raw.name : ''
+  if (!slug || !name || raw.nsfw === true) return null
+  const tags = Array.isArray(raw.tags)
+    ? raw.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 12)
+    : []
+  const summary = typeof raw.summary === 'string' ? raw.summary.trim() : ''
+  const description = typeof raw.description === 'string' ? raw.description.trim() : ''
+  return {
+    id: plugin.id + ':' + slug,
+    pluginId: plugin.id,
+    pluginName: plugin.name,
+    name,
+    description: summary || description,
+    summary: summary || undefined,
+    creator:
+      typeof raw.author === 'string' && raw.author.trim() !== ''
+        ? raw.author.trim()
+        : '像素酒馆作者',
+    kind: 'character',
+    sourceUrl: `https://chat.xstavern.com/market?search=${encodeURIComponent(name)}`,
+    downloadUrl: `${PIXEL_TAVERN_API}?action=download&format=json&slug=${encodeURIComponent(slug)}`,
+    coverUrl:
+      typeof raw.preview_url === 'string' && raw.preview_url
+        ? gateway !== null
+          ? gateway + '/api/v1/market/image?url=' + encodeURIComponent(raw.preview_url)
+          : raw.preview_url
+        : undefined,
+    fileName: slug + '.json',
+    tags,
+    license: '以站点与作者说明为准',
+    licenseUrl: 'https://chat.xstavern.com/market',
+    series: typeof raw.series === 'string' && raw.series ? raw.series : undefined,
+    category: typeof raw.category === 'string' && raw.category ? raw.category : undefined,
+    downloadCount: typeof raw.download_count === 'number' ? raw.download_count : undefined,
+    rating: typeof raw.avg_rating === 'number' ? raw.avg_rating : undefined,
+    ratingCount: typeof raw.rating_count === 'number' ? raw.rating_count : undefined,
+    createdAt: typeof raw.created_at === 'string' ? raw.created_at : undefined,
+  }
+}
 
+const collectPixelCards = (
+  plugin: MarketplacePlugin,
+  payloads: PromiseSettledResult<string>[],
+  gateway: string | null
+): { cards: MarketCard[]; firstError: unknown } => {
   const cards: MarketCard[] = []
   const seen = new Set<string>()
   let firstError: unknown = null
-
-  for (const result of settled) {
+  for (const result of payloads) {
     if (result.status !== 'fulfilled') {
       firstError ??= result.reason
       continue
@@ -329,42 +366,153 @@ const loadPixelTavernCards = async (
       continue
     }
     if (!isRecord(data) || data.success !== true || !Array.isArray(data.cards)) continue
-
     for (const raw of data.cards) {
       if (!isRecord(raw)) continue
-      const slug = typeof raw.slug === 'string' ? raw.slug : ''
-      const name = typeof raw.name === 'string' ? raw.name : ''
-      if (!slug || !name || seen.has(slug) || raw.nsfw === true) continue
-      seen.add(slug)
-      const tags = Array.isArray(raw.tags)
-        ? raw.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 12)
-        : []
-      cards.push({
-        id: plugin.id + ':' + slug,
-        pluginId: plugin.id,
-        pluginName: plugin.name,
-        name,
-        description: typeof raw.description === 'string' ? raw.description : '',
-        creator:
-          typeof raw.author === 'string' && raw.author.trim() !== ''
-            ? raw.author.trim()
-            : '像素酒馆作者',
-        kind: 'character',
-        sourceUrl: `https://chat.xstavern.com/market?search=${encodeURIComponent(name)}`,
-        downloadUrl: `${PIXEL_TAVERN_API}?action=download&format=json&slug=${encodeURIComponent(slug)}`,
-        fileName: slug + '.json',
-        tags,
-        license: '以站点与作者说明为准',
-        licenseUrl: 'https://chat.xstavern.com/market',
-      })
+      const card = mapPixelCard(plugin, raw, gateway)
+      if (!card || seen.has(card.id)) continue
+      seen.add(card.id)
+      cards.push(card)
     }
   }
+  return { cards, firstError }
+}
 
+const loadPixelCharacters = async (
+  plugin: MarketplacePlugin,
+  customOrigin?: string
+): Promise<MarketCard[]> => {
+  const cookie = readNativeCookie(plugin.id)
+  const gateway = await resolveGatewayOrigin(customOrigin)
+  const settled = await Promise.allSettled(
+    Array.from({ length: PIXEL_TAVERN_PAGES }, (_, index) =>
+      requestText(
+        `${PIXEL_TAVERN_API}?action=list&page=${index + 1}&sort=popular&limit=${PIXEL_TAVERN_LIMIT}`,
+        true,
+        customOrigin,
+        cookie
+      )
+    )
+  )
+  const { cards, firstError } = collectPixelCards(plugin, settled, gateway)
   if (cards.length === 0) {
     throw new Error(
       firstError ? friendlyError(firstError) : '像素酒馆暂时没有返回可浏览的卡片'
     )
   }
+  return cards
+}
+
+const loadPixelResources = async (
+  plugin: MarketplacePlugin,
+  customOrigin?: string
+): Promise<MarketCard[]> => {
+  const cookie = readNativeCookie(plugin.id)
+  const urls = [
+    ...Array.from(
+      { length: PIXEL_TAVERN_RESOURCE_PAGES },
+      (_, index) => `${PIXEL_TAVERN_RESOURCES}?page=${index + 1}&type=worldbook`
+    ),
+    `${PIXEL_TAVERN_RESOURCES}?page=1&type=preset`,
+  ]
+  const settled = await Promise.allSettled(
+    urls.map((url) => requestText(url, true, customOrigin, cookie))
+  )
+  const cards: MarketCard[] = []
+  const seen = new Set<string>()
+  for (const result of settled) {
+    if (result.status !== 'fulfilled') continue
+    let data: unknown
+    try {
+      data = JSON.parse(result.value)
+    } catch {
+      continue
+    }
+    if (!isRecord(data) || data.success !== true || !Array.isArray(data.resources)) continue
+    for (const raw of data.resources) {
+      if (!isRecord(raw) || raw.nsfw === true) continue
+      const id = typeof raw.id === 'string' ? raw.id : ''
+      const title = typeof raw.title === 'string' ? raw.title : ''
+      const kind = raw.type === 'worldbook' ? 'world' : raw.type === 'preset' ? 'rule' : null
+      if (!id || !title || !kind || seen.has(id)) continue
+      seen.add(id)
+      const fileName =
+        typeof raw.file_name === 'string' && raw.file_name ? raw.file_name : `${title}.json`
+      const description = typeof raw.description === 'string' ? raw.description : ''
+      const collection = typeof raw.collection === 'string' ? raw.collection : ''
+      cards.push({
+        id: plugin.id + ':' + id,
+        pluginId: plugin.id,
+        pluginName: plugin.name,
+        name: title,
+        description,
+        summary: description || undefined,
+        creator: collection || plugin.author,
+        kind,
+        sourceUrl: `https://chat.xstavern.com/market/resources?search=${encodeURIComponent(title)}`,
+        downloadUrl: `${PIXEL_TAVERN_RESOURCES}/${encodeURIComponent(id)}/download`,
+        fileName,
+        tags: Array.isArray(raw.tags)
+          ? raw.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 12)
+          : [],
+        license: '以站点与作者说明为准',
+        licenseUrl: 'https://chat.xstavern.com/market/resources',
+        category: collection || undefined,
+        downloadCount:
+          typeof raw.download_count === 'number' ? raw.download_count : undefined,
+      })
+    }
+  }
+  return cards
+}
+
+const loadPixelTavernCards = async (
+  plugin: MarketplacePlugin,
+  customOrigin?: string
+): Promise<MarketCard[]> => {
+  const [characters, resources] = await Promise.allSettled([
+    loadPixelCharacters(plugin, customOrigin),
+    loadPixelResources(plugin, customOrigin),
+  ])
+  const cards: MarketCard[] = []
+  if (characters.status === 'fulfilled') cards.push(...characters.value)
+  if (resources.status === 'fulfilled') cards.push(...resources.value)
+  if (cards.length === 0) {
+    const reason = characters.status === 'rejected' ? characters.reason : null
+    throw new Error(
+      reason ? friendlyError(reason) : '像素酒馆暂时没有返回可浏览的卡片'
+    )
+  }
+  return cards
+}
+
+const pixelSearchCache = new Map<string, { expiresAt: number; cards: MarketCard[] }>()
+
+export async function searchMarketCards(
+  query: string,
+  customOrigin?: string
+): Promise<MarketCard[]> {
+  const trimmed = query.trim()
+  if (!trimmed) return []
+  const plugin = BUILTIN_MARKET_PLUGINS.find((entry) => entry.id === 'pixel-tavern')
+  if (!plugin) return []
+  const cacheKey = trimmed.toLocaleLowerCase()
+  const cached = pixelSearchCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.cards
+
+  const cookie = readNativeCookie(plugin.id)
+  const gateway = await resolveGatewayOrigin(customOrigin)
+  const settled = await Promise.allSettled(
+    [1, 2].map((page) =>
+      requestText(
+        `${PIXEL_TAVERN_API}?action=list&page=${page}&sort=popular&limit=24&search=${encodeURIComponent(trimmed)}`,
+        true,
+        customOrigin,
+        cookie
+      )
+    )
+  )
+  const { cards } = collectPixelCards(plugin, settled, gateway)
+  pixelSearchCache.set(cacheKey, { expiresAt: Date.now() + CARDS_CACHE_MS, cards })
   return cards
 }
 
@@ -391,14 +539,14 @@ const writeManifestUrls = (urls: string[]): void => {
 
 const normalizeManifestUrl = (raw: string): string => {
   const trimmed = raw.trim()
-  if (!trimmed) throw new Error('请填写插件清单地址')
+  if (!trimmed) throw new Error('请填写来源清单地址')
   let url: URL
   try {
     url = new URL(trimmed)
   } catch {
-    throw new Error('插件清单地址无效')
+    throw new Error('来源清单地址无效')
   }
-  if (url.protocol !== 'https:') throw new Error('插件清单必须是 HTTPS 地址')
+  if (url.protocol !== 'https:') throw new Error('来源清单必须是 HTTPS 地址')
   return url.toString()
 }
 
@@ -412,7 +560,7 @@ const loadManifest = async (url: string, force = false): Promise<MarketManifest>
   try {
     value = JSON.parse(text)
   } catch {
-    throw new Error('插件清单不是有效的 JSON')
+    throw new Error('来源清单不是有效的 JSON')
   }
   const manifest = parseMarketManifest(value)
   manifestCache.set(url, { expiresAt: Date.now() + MANIFEST_CACHE_MS, manifest })
@@ -438,7 +586,7 @@ export async function listMarketPlugins(): Promise<MarketPluginView[]> {
       try {
         const manifest = await loadManifest(url)
         if (builtinIds.has(manifest.id)) {
-          throw new Error('插件 id 与内置插件冲突：' + manifest.id)
+          throw new Error('来源 id 与内置插件冲突：' + manifest.id)
         }
         return {
           id: manifest.id,
@@ -577,11 +725,11 @@ export async function downloadMarketCard(
 export async function addManifestPlugin(rawUrl: string): Promise<MarketPluginView> {
   const url = normalizeManifestUrl(rawUrl)
   const urls = readManifestUrls()
-  if (urls.includes(url)) throw new Error('这个插件已经添加过了')
-  if (urls.length >= MAX_MANIFESTS) throw new Error(`最多同时订阅 ${MAX_MANIFESTS} 个插件`)
+  if (urls.includes(url)) throw new Error('这个来源已经添加过了')
+  if (urls.length >= MAX_MANIFESTS) throw new Error(`最多同时订阅 ${MAX_MANIFESTS} 个来源`)
   const manifest = await loadManifest(url, true)
   if (BUILTIN_MARKET_PLUGINS.some((plugin) => plugin.id === manifest.id)) {
-    throw new Error('插件 id 与内置插件冲突')
+    throw new Error('来源 id 与内置插件冲突')
   }
   writeManifestUrls([...urls, url])
   return {

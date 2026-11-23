@@ -195,7 +195,7 @@ const SiderInner = ({ mobile }: { mobile: boolean }) => {
         >
           <span className={styles.footerLeft}>
             <IconGlobe />
-            <span>插件市场</span>
+            <span>卡牌库</span>
           </span>
         </button>
         <button

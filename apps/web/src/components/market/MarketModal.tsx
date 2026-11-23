@@ -15,6 +15,7 @@ import {
   listMarketPlugins,
   loadMarketCatalog,
   removeManifestPlugin,
+  searchMarketCards,
   type MarketCatalog,
   type MarketPluginView,
 } from '../../services/market.ts'
@@ -35,6 +36,7 @@ import {
 } from '../base/icons.tsx'
 import { Modal } from '../base/Modal.tsx'
 import { MarketAuthModal } from './MarketAuthModal.tsx'
+import { MarketDetailModal } from './MarketDetailModal.tsx'
 import styles from './MarketModal.module.css'
 
 type MarketView = 'catalog' | 'sources'
@@ -91,6 +93,9 @@ export const MarketModal = () => {
   const [authStatus, setAuthStatus] = useState<Record<string, MarketAuthStatus>>({})
   const [authPlugin, setAuthPlugin] = useState<MarketPluginView | null>(null)
   const [pendingCard, setPendingCard] = useState<MarketCard | null>(null)
+  const [selectedCard, setSelectedCard] = useState<MarketCard | null>(null)
+  const [remoteResults, setRemoteResults] = useState<MarketCard[] | null>(null)
+  const [searching, setSearching] = useState(false)
 
   const refreshCatalog = useCallback(async () => {
     setLoading(true)
@@ -132,6 +137,10 @@ export const MarketModal = () => {
   useEffect(() => {
     if (!open) return
     setView('catalog')
+    setQuery('')
+    setRemoteResults(null)
+    setSearching(false)
+    setSelectedCard(null)
     void refreshCatalog()
     void refreshPlugins()
   }, [open, refreshCatalog, refreshPlugins])
@@ -151,25 +160,59 @@ export const MarketModal = () => {
     [installedKeys]
   )
 
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (trimmed.length < 2) {
+      setRemoteResults(null)
+      setSearching(false)
+      return
+    }
+    setRemoteResults(null)
+    setSearching(true)
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void searchMarketCards(trimmed, settings.customGatewayOrigin)
+        .then((cards) => {
+          if (!cancelled) setRemoteResults(cards)
+        })
+        .catch(() => {
+          if (!cancelled) setRemoteResults(null)
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false)
+        })
+    }, 350)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [query, settings.customGatewayOrigin])
+
   const filtered = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase()
-    return catalog.cards
+    const searchMode = keyword.length >= 2
+    const useRemote = searchMode && remoteResults !== null
+    const sourceCards = useRemote
+      ? [...catalog.cards.filter((card) => card.pluginId !== 'pixel-tavern'), ...remoteResults!]
+      : catalog.cards
+    return sourceCards
       .filter((card) => category === 'all' || card.kind === category)
       .filter((card) => !onlyInstalled || installedKeys.has(cardKey(card)))
-      .filter((card) =>
-        keyword === ''
+      .filter((card) => {
+        if (useRemote && card.pluginId === 'pixel-tavern') return true
+        return keyword === ''
           ? true
           : [card.name, card.description, card.creator, card.pluginName, ...card.tags]
               .join(' ')
               .toLocaleLowerCase()
               .includes(keyword)
-      )
+      })
       .sort(
         (a, b) =>
           KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
           a.name.localeCompare(b.name, 'zh-Hans-CN')
       )
-  }, [catalog.cards, category, installedKeys, onlyInstalled, query])
+  }, [catalog.cards, category, installedKeys, onlyInstalled, query, remoteResults])
 
   const failedSources = catalog.sources.filter((source) => source.error)
   const sourceMap = useMemo(
@@ -289,7 +332,7 @@ export const MarketModal = () => {
 
   const handleRemoveManifest = async (plugin: MarketPluginView) => {
     if (!plugin.manifestUrl) return
-    if (!window.confirm(`移除来源插件“${plugin.name}”？已经下载到素材库的内容不会被删除。`)) return
+    if (!window.confirm(`移除来源“${plugin.name}”？已经下载到素材库的内容不会被删除。`)) return
     removeManifestPlugin(plugin.manifestUrl)
     await Promise.all([refreshPlugins(), refreshCatalog()])
   }
@@ -319,8 +362,8 @@ export const MarketModal = () => {
           type="button"
           className={styles.sourcesBtn}
           onClick={() => setView('sources')}
-          title="来源插件"
-          aria-label="来源插件"
+          title="来源管理"
+          aria-label="来源管理"
         >
           <IconGlobe size={16} />
         </button>
@@ -381,7 +424,11 @@ export const MarketModal = () => {
         </div>
       ) : filtered.length === 0 ? (
         <div className={styles.state}>
-          {onlyInstalled ? '这个分类下还没有已下载的资源。' : '没有匹配的资源。'}
+          {searching
+            ? '正在搜索全部卡牌…'
+            : onlyInstalled
+              ? '这个分类下还没有已下载的资源。'
+              : '没有匹配的资源。'}
         </div>
       ) : (
         <div className={styles.grid}>
@@ -389,7 +436,20 @@ export const MarketModal = () => {
             const installed = isInstalled(card)
             const busy = downloadingKey === cardKey(card)
             return (
-              <article className={styles.card} key={cardKey(card)}>
+              <article
+                className={styles.card}
+                key={cardKey(card)}
+                role="button"
+                tabIndex={0}
+                title="查看详情"
+                onClick={() => setSelectedCard(card)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    setSelectedCard(card)
+                  }
+                }}
+              >
                 <div className={styles.cardTitleRow}>
                   <h3>{card.name}</h3>
                   <span className={styles.kindBadge}>{KIND_LABELS[card.kind]}</span>
@@ -419,6 +479,7 @@ export const MarketModal = () => {
                       href={card.sourceUrl}
                       target="_blank"
                       rel="noreferrer"
+                      onClick={(event) => event.stopPropagation()}
                     >
                       <IconGlobe size={11} /> 来源页面
                     </a>
@@ -431,6 +492,7 @@ export const MarketModal = () => {
                       href={card.licenseUrl}
                       target="_blank"
                       rel="noreferrer"
+                      onClick={(event) => event.stopPropagation()}
                     >
                       授权说明
                     </a>
@@ -439,7 +501,10 @@ export const MarketModal = () => {
                     <button
                       type="button"
                       className={styles.removeBtn}
-                      onClick={() => void handleRemove(card)}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleRemove(card)
+                      }}
                     >
                       <IconTrash size={11} /> 移除
                     </button>
@@ -448,7 +513,10 @@ export const MarketModal = () => {
                       type="button"
                       className={styles.installBtn}
                       disabled={busy}
-                      onClick={() => void handleInstall(card)}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleInstall(card)
+                      }}
                     >
                       {busy ? (
                         '下载中…'
@@ -470,6 +538,7 @@ export const MarketModal = () => {
               <div className={styles.loadingHint}>正在加载更多来源…</div>
             </>
           ) : null}
+          {searching ? <div className={styles.loadingHint}>正在搜索全部卡牌…</div> : null}
         </div>
       )}
     </>
@@ -482,7 +551,7 @@ export const MarketModal = () => {
           <IconChevronLeft size={14} />
           市场
         </button>
-        <strong>来源插件</strong>
+        <strong>来源管理</strong>
         <button
           type="button"
           className={styles.refreshBtn}
@@ -502,7 +571,7 @@ export const MarketModal = () => {
         <input
           value={manifestInput}
           onChange={(event) => setManifestInput(event.target.value)}
-          placeholder="粘贴插件清单 JSON 地址（如 GitHub raw）"
+          placeholder="粘贴来源清单 JSON 地址（如 GitHub raw）"
           spellCheck={false}
         />
         <button type="submit" disabled={addingManifest || manifestInput.trim() === ''}>
@@ -516,7 +585,7 @@ export const MarketModal = () => {
         {loadingPlugins && plugins.length === 0 ? (
           <div className={styles.state}>正在读取来源…</div>
         ) : plugins.length === 0 ? (
-          <div className={styles.state}>还没有来源插件。</div>
+          <div className={styles.state}>还没有来源。</div>
         ) : (
           plugins.map((plugin) => {
             const status = sourceMap.get(plugin.id)
@@ -593,7 +662,7 @@ export const MarketModal = () => {
 
       <div className={styles.footnote}>
         <span>
-          <IconCheck size={11} /> 插件只描述来源与资源，不执行远程代码
+          <IconCheck size={11} /> 来源只描述目录与资源，不执行远程代码
         </span>
         <span>目前只接入免费来源</span>
       </div>
@@ -602,7 +671,7 @@ export const MarketModal = () => {
 
   return (
     <>
-      <Modal open={open} title="插件市场" size="lg" onClose={() => setOpen(false)}>
+      <Modal open={open} title="卡牌库" size="lg" onClose={() => setOpen(false)}>
         <div className={styles.page}>{view === 'catalog' ? renderCatalog() : renderSources()}</div>
       </Modal>
       <MarketAuthModal
@@ -622,6 +691,14 @@ export const MarketModal = () => {
             void installCard(card)
           }
         }}
+      />
+      <MarketDetailModal
+        card={selectedCard}
+        installed={selectedCard ? isInstalled(selectedCard) : false}
+        busy={selectedCard ? downloadingKey === cardKey(selectedCard) : false}
+        onClose={() => setSelectedCard(null)}
+        onInstall={(card) => void handleInstall(card)}
+        onRemove={(card) => void handleRemove(card)}
       />
     </>
   )
