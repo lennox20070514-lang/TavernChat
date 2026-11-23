@@ -78,7 +78,10 @@ export const MarketModal = () => {
     setLoading(true)
     setCatalogError('')
     try {
-      setCatalog(await loadMarketCatalog(settings.customGatewayOrigin))
+      const result = await loadMarketCatalog(settings.customGatewayOrigin, (partial) => {
+        setCatalog(partial)
+      })
+      setCatalog(result)
     } catch (err) {
       setCatalogError(errorMessage(err))
     } finally {
@@ -300,7 +303,11 @@ export const MarketModal = () => {
           仅显示已下载
         </button>
         <span className={styles.countLine}>
-          {loading ? '正在读取来源…' : `当前显示了 ${filtered.length} 个资源`}
+          {loading
+            ? catalog.cards.length > 0
+              ? `当前显示了 ${filtered.length} 个资源 · 正在读取更多来源…`
+              : '正在读取来源…'
+            : `当前显示了 ${filtered.length} 个资源`}
         </span>
       </div>
 

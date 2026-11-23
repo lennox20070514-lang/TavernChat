@@ -403,13 +403,26 @@ export const handleMarketProxy = async (req: IncomingMessage, res: ServerRespons
   }
 
   try {
-    const upstream = await fetch(target, {
-      signal: AbortSignal.timeout(25_000),
-      redirect: 'error',
-      headers: {
-        Accept: as === 'bytes' ? 'image/png' : 'text/html,application/json;q=0.9,*/*;q=0.8',
-      },
-    })
+    let upstream: Response | null = null
+    let lastError: unknown = null
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        upstream = await fetch(target, {
+          signal: AbortSignal.timeout(35_000),
+          redirect: 'error',
+          headers: {
+            Accept: as === 'bytes' ? 'image/png' : 'text/html,application/json;q=0.9,*/*;q=0.8',
+          },
+        })
+        break
+      } catch (err) {
+        lastError = err
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 300))
+        }
+      }
+    }
+    if (!upstream) throw lastError ?? new Error('来源请求失败')
     if (!upstream.ok || !upstream.body) {
       sendJson(res, 502, { error: '来源返回 HTTP ' + upstream.status })
       return
@@ -422,12 +435,30 @@ export const handleMarketProxy = async (req: IncomingMessage, res: ServerRespons
     }
 
     const contentType = upstream.headers.get('content-type') ?? ''
-    if (!/image\/png/i.test(contentType)) {
+    const jsonResponse =
+      /application\/json|text\/json/i.test(contentType) || /\.json$/i.test(target.pathname)
+    if (!jsonResponse && !/image\/png/i.test(contentType)) {
       await upstream.body.cancel()
-      sendJson(res, 502, { error: '来源没有返回 PNG 角色卡' })
+      sendJson(res, 502, { error: '来源没有返回 PNG 或 JSON 角色卡' })
       return
     }
     const buffer = await readBodyWithLimit(upstream.body, MARKET_BYTES_LIMIT)
+    if (jsonResponse) {
+      try {
+        JSON.parse(buffer.toString('utf8'))
+      } catch {
+        sendJson(res, 502, { error: '下载内容不是有效的 JSON 角色卡' })
+        return
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': String(buffer.byteLength),
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      })
+      res.end(buffer)
+      return
+    }
     try {
       if (!isPngBytes(buffer)) throw new Error('PNG 签名无效')
       JSON.parse(readCharacterJsonFromPng(buffer))

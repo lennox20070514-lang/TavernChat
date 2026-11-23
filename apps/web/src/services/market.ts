@@ -63,8 +63,8 @@ const nativeGet = async (url: string, mode: FetchMode): Promise<string | Uint8Ar
   const response = await CapacitorHttp.get({
     url,
     responseType: mode === 'bytes' ? 'arraybuffer' : 'text',
-    connectTimeout: 30_000,
-    readTimeout: 30_000,
+    connectTimeout: 40_000,
+    readTimeout: 40_000,
     disableRedirects: true,
     headers: { Accept: acceptFor(mode) },
   })
@@ -83,7 +83,7 @@ const gatewayGet = async (
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, as: mode }),
-    signal: AbortSignal.timeout(35_000),
+    signal: AbortSignal.timeout(45_000),
   })
   if (!response.ok) {
     const raw = await response.text().catch(() => '')
@@ -105,7 +105,7 @@ const gatewayGet = async (
 const directGet = async (url: string, mode: FetchMode): Promise<string | Uint8Array> => {
   const response = await fetch(url, {
     headers: { Accept: acceptFor(mode) },
-    signal: AbortSignal.timeout(35_000),
+    signal: AbortSignal.timeout(45_000),
     redirect: 'error',
   })
   if (!response.ok) throw new Error('来源返回 HTTP ' + response.status)
@@ -319,51 +319,50 @@ export type MarketCatalog = {
   sources: MarketSourceStatus[]
 }
 
-export async function loadMarketCatalog(customOrigin?: string): Promise<MarketCatalog> {
+export async function loadMarketCatalog(
+  customOrigin?: string,
+  onUpdate?: (catalog: MarketCatalog) => void
+): Promise<MarketCatalog> {
   const plugins = await listMarketPlugins()
-  const results = await Promise.all(
+  const cards: MarketCard[] = []
+  const sources: MarketSourceStatus[] = []
+
+  await Promise.all(
     plugins.map(async (plugin) => {
       if (plugin.error) {
-        return {
-          cards: [] as MarketCard[],
-          status: {
-            id: plugin.id,
-            name: plugin.name,
-            builtin: plugin.builtin,
-            count: 0,
-            error: plugin.error,
-          } satisfies MarketSourceStatus,
-        }
+        sources.push({
+          id: plugin.id,
+          name: plugin.name,
+          builtin: plugin.builtin,
+          count: 0,
+          error: plugin.error,
+        })
+        onUpdate?.({ cards: [...cards], sources: [...sources] })
+        return
       }
       try {
-        const cards = await loadMarketCards(plugin, customOrigin)
-        return {
-          cards,
-          status: {
-            id: plugin.id,
-            name: plugin.name,
-            builtin: plugin.builtin,
-            count: cards.length,
-          } satisfies MarketSourceStatus,
-        }
+        const sourceCards = await loadMarketCards(plugin, customOrigin)
+        cards.push(...sourceCards)
+        sources.push({
+          id: plugin.id,
+          name: plugin.name,
+          builtin: plugin.builtin,
+          count: sourceCards.length,
+        })
       } catch (err) {
-        return {
-          cards: [] as MarketCard[],
-          status: {
-            id: plugin.id,
-            name: plugin.name,
-            builtin: plugin.builtin,
-            count: 0,
-            error: friendlyError(err),
-          } satisfies MarketSourceStatus,
-        }
+        sources.push({
+          id: plugin.id,
+          name: plugin.name,
+          builtin: plugin.builtin,
+          count: 0,
+          error: friendlyError(err),
+        })
       }
+      onUpdate?.({ cards: [...cards], sources: [...sources] })
     })
   )
-  return {
-    cards: results.flatMap((result) => result.cards),
-    sources: results.map((result) => result.status),
-  }
+
+  return { cards, sources }
 }
 
 export async function loadMarketCards(
