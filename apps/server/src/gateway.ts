@@ -4,6 +4,11 @@ import {
   isPngBytes,
   readCharacterJsonFromPng,
 } from '@tavern-chat/core'
+import {
+  clearMarketSession,
+  getMarketSession,
+  setMarketSession,
+} from './marketSessions.ts'
 
 export type ProviderFormat = 'openai' | 'anthropic' | 'ollama'
 
@@ -392,15 +397,16 @@ export const handleMarketProxy = async (req: IncomingMessage, res: ServerRespons
     sendJson(res, 400, { error: '来源地址无效' })
     return
   }
-  const allowed = BUILTIN_MARKET_PLUGINS.some(
-    (plugin) =>
-      plugin.hosts.includes(target.hostname) &&
-      plugin.allowedPathPrefixes.some((prefix) => target.pathname.startsWith(prefix))
+  const plugin = BUILTIN_MARKET_PLUGINS.find(
+    (entry) =>
+      entry.hosts.includes(target.hostname) &&
+      entry.allowedPathPrefixes.some((prefix) => target.pathname.startsWith(prefix))
   )
-  if (target.protocol !== 'https:' || !allowed) {
+  if (target.protocol !== 'https:' || !plugin) {
     sendJson(res, 403, { error: '该地址不属于已接入的来源插件' })
     return
   }
+  const session = plugin.auth ? await getMarketSession(plugin.id) : undefined
 
   try {
     let upstream: Response | null = null
@@ -412,6 +418,10 @@ export const handleMarketProxy = async (req: IncomingMessage, res: ServerRespons
           redirect: 'error',
           headers: {
             Accept: as === 'bytes' ? 'image/png' : 'text/html,application/json;q=0.9,*/*;q=0.8',
+            ...(session?.cookie ? { Cookie: session.cookie } : {}),
+            ...(plugin.auth
+              ? { Referer: (plugin.homepage ?? target.origin) + '/' }
+              : {}),
           },
         })
         break
@@ -482,6 +492,291 @@ export const handleMarketProxy = async (req: IncomingMessage, res: ServerRespons
   }
 }
 
+const MARKET_AUTH_TIMEOUT = 20_000
+
+const readSetCookies = (headers: Headers): string[] => {
+  const source = headers as Headers & { getSetCookie?: () => string[] }
+  if (typeof source.getSetCookie === 'function') return source.getSetCookie()
+  const raw = headers.get('set-cookie')
+  return raw ? [raw] : []
+}
+
+const cookieHeaderFrom = (values: string[]): string => {
+  const pairs: string[] = []
+  for (const value of values) {
+    const first = value.split(';')[0]?.trim()
+    if (first && first.includes('=')) pairs.push(first)
+  }
+  return pairs.join('; ')
+}
+
+const findAuthPlugin = (pluginId: string) => {
+  const plugin = BUILTIN_MARKET_PLUGINS.find((entry) => entry.id === pluginId)
+  if (!plugin?.auth) return null
+  return { plugin, auth: plugin.auth }
+}
+
+const postMarketJson = async (url: string, body: unknown, cookie?: string) => {
+  const origin = new URL(url).origin
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Origin: origin,
+      Referer: origin + '/',
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(MARKET_AUTH_TIMEOUT),
+    redirect: 'error',
+  })
+  const text = await response.text()
+  let data: unknown = null
+  try {
+    data = JSON.parse(text)
+  } catch {
+    // 上游可能返回纯文本错误。
+  }
+  return { response, data, setCookies: readSetCookies(response.headers) }
+}
+
+const getMarketJson = async (url: string, cookie?: string) => {
+  const origin = new URL(url).origin
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      Origin: origin,
+      Referer: origin + '/',
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+    signal: AbortSignal.timeout(MARKET_AUTH_TIMEOUT),
+    redirect: 'error',
+  })
+  const text = await response.text()
+  let data: unknown = null
+  try {
+    data = JSON.parse(text)
+  } catch {
+    // 上游可能返回纯文本错误。
+  }
+  return { response, data }
+}
+
+const upstreamError = (data: unknown, fallback: string): string =>
+  isRecord(data) && typeof data.error === 'string' && data.error.trim()
+    ? data.error
+    : fallback
+
+export const handleMarketLogin = async (req: IncomingMessage, res: ServerResponse) => {
+  let body: JsonRecord
+  try {
+    body = await readJsonBody(req)
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+    return
+  }
+
+  const pluginId = typeof body.pluginId === 'string' ? body.pluginId : ''
+  const username = typeof body.username === 'string' ? body.username.trim() : ''
+  const password = typeof body.password === 'string' ? body.password : ''
+  if (!username || !password) {
+    sendJson(res, 400, { error: '请填写用户名和密码' })
+    return
+  }
+  const found = findAuthPlugin(pluginId)
+  if (!found) {
+    sendJson(res, 400, { error: '这个来源不支持站内登录' })
+    return
+  }
+
+  try {
+    const { response, data, setCookies } = await postMarketJson(
+      found.auth.origin + found.auth.loginPath,
+      { username, password }
+    )
+    if (!response.ok || (isRecord(data) && data.success === false)) {
+      sendJson(res, response.status >= 400 ? response.status : 400, {
+        error: upstreamError(data, '登录失败：HTTP ' + response.status),
+      })
+      return
+    }
+    const cookie = cookieHeaderFrom(setCookies)
+    if (!cookie) {
+      sendJson(res, 502, { error: '登录成功但上游没有返回会话 Cookie' })
+      return
+    }
+    await setMarketSession(found.plugin.id, cookie, isRecord(data) ? data.user : undefined)
+    sendJson(res, 200, { ok: true, user: isRecord(data) ? data.user : undefined })
+  } catch (err) {
+    sendJson(res, 502, {
+      error: '登录失败：' + (err instanceof Error ? err.message : String(err)),
+    })
+  }
+}
+
+export const handleMarketRegister = async (req: IncomingMessage, res: ServerResponse) => {
+  let body: JsonRecord
+  try {
+    body = await readJsonBody(req)
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+    return
+  }
+
+  const pluginId = typeof body.pluginId === 'string' ? body.pluginId : ''
+  const username = typeof body.username === 'string' ? body.username.trim() : ''
+  const password = typeof body.password === 'string' ? body.password : ''
+  const email = typeof body.email === 'string' ? body.email.trim() : ''
+  const code = typeof body.code === 'string' ? body.code.trim() : ''
+  if (!username || !password || !email || !code) {
+    sendJson(res, 400, { error: '请填写邮箱、验证码、用户名和密码' })
+    return
+  }
+  const found = findAuthPlugin(pluginId)
+  if (!found) {
+    sendJson(res, 400, { error: '这个来源不支持站内注册' })
+    return
+  }
+
+  try {
+    const { response, data, setCookies } = await postMarketJson(
+      found.auth.origin + found.auth.registerPath,
+      { username, password, email, verification_code: code }
+    )
+    if (!response.ok || (isRecord(data) && data.success === false)) {
+      sendJson(res, response.status >= 400 ? response.status : 400, {
+        error: upstreamError(data, '注册失败：HTTP ' + response.status),
+      })
+      return
+    }
+    let cookie = cookieHeaderFrom(setCookies)
+    let user = isRecord(data) ? data.user : undefined
+    if (!cookie) {
+      const login = await postMarketJson(found.auth.origin + found.auth.loginPath, {
+        username,
+        password,
+      })
+      if (login.response.ok && !(isRecord(login.data) && login.data.success === false)) {
+        cookie = cookieHeaderFrom(login.setCookies)
+        user = isRecord(login.data) ? login.data.user : user
+      }
+    }
+    if (cookie) await setMarketSession(found.plugin.id, cookie, user)
+    sendJson(res, 200, { ok: true, user, loggedIn: Boolean(cookie) })
+  } catch (err) {
+    sendJson(res, 502, {
+      error: '注册失败：' + (err instanceof Error ? err.message : String(err)),
+    })
+  }
+}
+
+export const handleMarketSendCode = async (req: IncomingMessage, res: ServerResponse) => {
+  let body: JsonRecord
+  try {
+    body = await readJsonBody(req)
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+    return
+  }
+
+  const pluginId = typeof body.pluginId === 'string' ? body.pluginId : ''
+  const email = typeof body.email === 'string' ? body.email.trim() : ''
+  if (!email) {
+    sendJson(res, 400, { error: '请填写邮箱' })
+    return
+  }
+  const found = findAuthPlugin(pluginId)
+  if (!found) {
+    sendJson(res, 400, { error: '这个来源不支持发送验证码' })
+    return
+  }
+
+  try {
+    const { response, data } = await postMarketJson(found.auth.origin + found.auth.sendCodePath, {
+      email,
+    })
+    if (!response.ok || (isRecord(data) && data.success === false)) {
+      sendJson(res, response.status >= 400 ? response.status : 400, {
+        error: upstreamError(data, '验证码发送失败：HTTP ' + response.status),
+      })
+      return
+    }
+    sendJson(res, 200, { ok: true })
+  } catch (err) {
+    sendJson(res, 502, {
+      error: '验证码发送失败：' + (err instanceof Error ? err.message : String(err)),
+    })
+  }
+}
+
+export const handleMarketAuthStatus = async (req: IncomingMessage, res: ServerResponse) => {
+  const reqUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
+  const pluginId = reqUrl.searchParams.get('pluginId') ?? ''
+  const found = findAuthPlugin(pluginId)
+  if (!found) {
+    sendJson(res, 400, { error: '这个来源不支持站内登录' })
+    return
+  }
+  const session = await getMarketSession(found.plugin.id)
+  if (!session) {
+    sendJson(res, 200, { ok: true, loggedIn: false })
+    return
+  }
+  try {
+    const { response, data } = await getMarketJson(
+      found.auth.origin + found.auth.sessionPath,
+      session.cookie
+    )
+    if (response.ok && !(isRecord(data) && data.success === false)) {
+      sendJson(res, 200, {
+        ok: true,
+        loggedIn: true,
+        user: isRecord(data) ? (data.user ?? session.user) : session.user,
+      })
+      return
+    }
+    if (response.status === 401 || response.status === 403) {
+      await clearMarketSession(found.plugin.id)
+      sendJson(res, 200, { ok: true, loggedIn: false })
+      return
+    }
+    sendJson(res, 200, { ok: true, loggedIn: false })
+  } catch (err) {
+    sendJson(res, 200, {
+      ok: true,
+      loggedIn: false,
+      error: '无法检查登录状态：' + (err instanceof Error ? err.message : String(err)),
+    })
+  }
+}
+
+export const handleMarketLogout = async (req: IncomingMessage, res: ServerResponse) => {
+  let body: JsonRecord
+  try {
+    body = await readJsonBody(req)
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+    return
+  }
+  const pluginId = typeof body.pluginId === 'string' ? body.pluginId : ''
+  const found = findAuthPlugin(pluginId)
+  if (!found) {
+    sendJson(res, 400, { error: '这个来源不支持站内登录' })
+    return
+  }
+  const session = await getMarketSession(found.plugin.id)
+  if (session) {
+    try {
+      await postMarketJson(found.auth.origin + found.auth.logoutPath, {}, session.cookie)
+    } catch {
+      // 上游退出失败也要清掉本地会话。
+    }
+  }
+  await clearMarketSession(found.plugin.id)
+  sendJson(res, 200, { ok: true })
+}
+
 export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') => {
   return async (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
@@ -514,6 +809,26 @@ export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') =>
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/models') {
         await handleModelsProxy(req, res)
+        return
+      }
+      if (req.method === 'POST' && reqUrl.pathname === '/api/v1/market/auth/login') {
+        await handleMarketLogin(req, res)
+        return
+      }
+      if (req.method === 'POST' && reqUrl.pathname === '/api/v1/market/auth/register') {
+        await handleMarketRegister(req, res)
+        return
+      }
+      if (req.method === 'POST' && reqUrl.pathname === '/api/v1/market/auth/send-code') {
+        await handleMarketSendCode(req, res)
+        return
+      }
+      if (req.method === 'GET' && reqUrl.pathname === '/api/v1/market/auth/status') {
+        await handleMarketAuthStatus(req, res)
+        return
+      }
+      if (req.method === 'POST' && reqUrl.pathname === '/api/v1/market/auth/logout') {
+        await handleMarketLogout(req, res)
         return
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/market/proxy') {

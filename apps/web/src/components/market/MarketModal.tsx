@@ -19,6 +19,11 @@ import {
   type MarketPluginView,
 } from '../../services/market.ts'
 import {
+  getMarketAuthStatus,
+  marketLogout,
+  type MarketAuthStatus,
+} from '../../services/marketAuth.ts'
+import {
   IconCheck,
   IconChevronLeft,
   IconDownload,
@@ -29,6 +34,7 @@ import {
   IconTrash,
 } from '../base/icons.tsx'
 import { Modal } from '../base/Modal.tsx'
+import { MarketAuthModal } from './MarketAuthModal.tsx'
 import styles from './MarketModal.module.css'
 
 type MarketView = 'catalog' | 'sources'
@@ -50,6 +56,15 @@ const CATEGORY_TABS: Array<{ key: Category; label: string }> = [
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const cardKey = (card: MarketCard): string => card.pluginId + ':' + card.id
+
+const SkeletonCard = () => (
+  <div className={styles.skeletonCard} aria-hidden="true">
+    <span className={styles.skeletonTitle} />
+    <span className={styles.skeletonMeta} />
+    <span className={styles.skeletonText} />
+    <span className={styles.skeletonTextShort} />
+  </div>
+)
 
 export const MarketModal = () => {
   const open = useAppStore((s) => s.marketOpen)
@@ -73,6 +88,9 @@ export const MarketModal = () => {
   const [category, setCategory] = useState<Category>('all')
   const [onlyInstalled, setOnlyInstalled] = useState(false)
   const [downloadingKey, setDownloadingKey] = useState('')
+  const [authStatus, setAuthStatus] = useState<Record<string, MarketAuthStatus>>({})
+  const [authPlugin, setAuthPlugin] = useState<MarketPluginView | null>(null)
+  const [pendingCard, setPendingCard] = useState<MarketCard | null>(null)
 
   const refreshCatalog = useCallback(async () => {
     setLoading(true)
@@ -93,13 +111,23 @@ export const MarketModal = () => {
     setLoadingPlugins(true)
     setSourceError('')
     try {
-      setPlugins(await listMarketPlugins())
+      const next = await listMarketPlugins()
+      setPlugins(next)
+      const authEntries = await Promise.all(
+        next
+          .filter((plugin) => plugin.auth)
+          .map(
+            async (plugin) =>
+              [plugin.id, await getMarketAuthStatus(plugin.id, settings.customGatewayOrigin)] as const
+          )
+      )
+      setAuthStatus(Object.fromEntries(authEntries))
     } catch (err) {
       setSourceError(errorMessage(err))
     } finally {
       setLoadingPlugins(false)
     }
-  }, [])
+  }, [settings.customGatewayOrigin])
 
   useEffect(() => {
     if (!open) return
@@ -122,17 +150,6 @@ export const MarketModal = () => {
     (card: MarketCard) => installedKeys.has(cardKey(card)),
     [installedKeys]
   )
-
-  const counts = useMemo(() => {
-    const result: Record<Category, number> = {
-      all: catalog.cards.length,
-      character: 0,
-      world: 0,
-      rule: 0,
-    }
-    for (const card of catalog.cards) result[card.kind] += 1
-    return result
-  }, [catalog.cards])
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase()
@@ -190,7 +207,7 @@ export const MarketModal = () => {
     await upsertComponent({ ...component, origin: buildOrigin(card, component.kind) })
   }
 
-  const handleInstall = async (card: MarketCard) => {
+  const installCard = async (card: MarketCard) => {
     const source = sourceMap.get(card.pluginId)
     setDownloadingKey(cardKey(card))
     try {
@@ -219,6 +236,17 @@ export const MarketModal = () => {
     } finally {
       setDownloadingKey('')
     }
+  }
+
+  const handleInstall = async (card: MarketCard) => {
+    const plugin = plugins.find((entry) => entry.id === card.pluginId)
+    if (plugin?.auth && !authStatus[plugin.id]?.loggedIn) {
+      setPendingCard(card)
+      setAuthPlugin(plugin)
+      showToast('请先登录' + plugin.name, 'info')
+      return
+    }
+    await installCard(card)
   }
 
   const handleRemove = async (card: MarketCard) => {
@@ -266,6 +294,16 @@ export const MarketModal = () => {
     await Promise.all([refreshPlugins(), refreshCatalog()])
   }
 
+  const handleLogout = async (plugin: MarketPluginView) => {
+    try {
+      await marketLogout(plugin.id, settings.customGatewayOrigin)
+      setAuthStatus((current) => ({ ...current, [plugin.id]: { loggedIn: false } }))
+      showToast(`已退出 ${plugin.name}`, 'success')
+    } catch (err) {
+      showToast(errorMessage(err), 'error')
+    }
+  }
+
   const renderCatalog = () => (
     <>
       <div className={styles.topbar}>
@@ -285,7 +323,6 @@ export const MarketModal = () => {
           aria-label="来源插件"
         >
           <IconGlobe size={16} />
-          <span>{catalog.sources.length}</span>
         </button>
       </div>
 
@@ -302,13 +339,6 @@ export const MarketModal = () => {
           </span>
           仅显示已下载
         </button>
-        <span className={styles.countLine}>
-          {loading
-            ? catalog.cards.length > 0
-              ? `当前显示了 ${filtered.length} 个资源 · 正在读取更多来源…`
-              : '正在读取来源…'
-            : `当前显示了 ${filtered.length} 个资源`}
-        </span>
       </div>
 
       <div className={styles.tabs}>
@@ -320,7 +350,6 @@ export const MarketModal = () => {
             onClick={() => setCategory(tab.key)}
           >
             {tab.label}
-            <span className={styles.tabCount}>{counts[tab.key]}</span>
           </button>
         ))}
       </div>
@@ -336,7 +365,7 @@ export const MarketModal = () => {
 
       {failedSources.length > 0 ? (
         <div className={styles.warn}>
-          <span>{failedSources.length} 个来源暂时不可用</span>
+          <span>部分来源暂时不可用</span>
           <button type="button" className={styles.linkBtn} onClick={() => setView('sources')}>
             查看来源
           </button>
@@ -344,7 +373,12 @@ export const MarketModal = () => {
       ) : null}
 
       {loading && catalog.cards.length === 0 ? (
-        <div className={styles.state}>正在读取来源…</div>
+        <div className={styles.grid}>
+          {Array.from({ length: 6 }).map((_, index) => (
+            <SkeletonCard key={index} />
+          ))}
+          <div className={styles.loadingHint}>正在读取来源…</div>
+        </div>
       ) : filtered.length === 0 ? (
         <div className={styles.state}>
           {onlyInstalled ? '这个分类下还没有已下载的资源。' : '没有匹配的资源。'}
@@ -429,6 +463,13 @@ export const MarketModal = () => {
               </article>
             )
           })}
+          {loading ? (
+            <>
+              <SkeletonCard />
+              <SkeletonCard />
+              <div className={styles.loadingHint}>正在加载更多来源…</div>
+            </>
+          ) : null}
         </div>
       )}
     </>
@@ -499,8 +540,39 @@ export const MarketModal = () => {
                   <div className={styles.pluginMeta}>
                     {plugin.author}
                     {plugin.license ? ` · ${plugin.license}` : ''}
-                    {status && !status.error ? ` · ${status.count} 个资源` : ''}
                   </div>
+                  {plugin.auth ? (
+                    <div className={styles.authBox}>
+                      {authStatus[plugin.id]?.loggedIn ? (
+                        <>
+                          <span className={styles.authUser}>
+                            已登录：
+                            {authStatus[plugin.id]?.user?.username ||
+                              authStatus[plugin.id]?.user?.email ||
+                              '账号'}
+                          </span>
+                          <button
+                            type="button"
+                            className={styles.authBtn}
+                            onClick={() => void handleLogout(plugin)}
+                          >
+                            退出
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className={styles.authBtn}
+                          onClick={() => setAuthPlugin(plugin)}
+                        >
+                          登录 / 注册
+                        </button>
+                      )}
+                      {authStatus[plugin.id]?.error ? (
+                        <span className={styles.authError}>{authStatus[plugin.id]?.error}</span>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 {!plugin.builtin && plugin.manifestUrl ? (
                   <button
@@ -529,8 +601,28 @@ export const MarketModal = () => {
   )
 
   return (
-    <Modal open={open} title="插件市场" size="lg" onClose={() => setOpen(false)}>
-      <div className={styles.page}>{view === 'catalog' ? renderCatalog() : renderSources()}</div>
-    </Modal>
+    <>
+      <Modal open={open} title="插件市场" size="lg" onClose={() => setOpen(false)}>
+        <div className={styles.page}>{view === 'catalog' ? renderCatalog() : renderSources()}</div>
+      </Modal>
+      <MarketAuthModal
+        open={authPlugin !== null}
+        plugin={authPlugin}
+        onClose={() => {
+          setAuthPlugin(null)
+          setPendingCard(null)
+        }}
+        onLoggedIn={(status) => {
+          if (!authPlugin) return
+          setAuthStatus((current) => ({ ...current, [authPlugin.id]: status }))
+          showToast(`已登录 ${authPlugin.name}`, 'success')
+          const card = pendingCard
+          setPendingCard(null)
+          if (card && card.pluginId === authPlugin.id) {
+            void installCard(card)
+          }
+        }}
+      />
+    </>
   )
 }

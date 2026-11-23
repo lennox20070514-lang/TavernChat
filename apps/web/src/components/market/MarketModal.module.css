@@ -44,12 +44,11 @@
 
 .sourcesBtn {
   height: 36px;
-  min-width: 42px;
+  min-width: 36px;
   padding: 0 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-subtle);
@@ -115,13 +114,6 @@
   transform: translateX(15px);
 }
 
-.countLine {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
 .tabs {
   flex: 0 0 auto;
   padding: 0 18px 10px;
@@ -155,12 +147,6 @@
   background: var(--bg-active);
   color: var(--text-primary);
   font-weight: 600;
-}
-
-.tabCount {
-  color: var(--text-muted);
-  font-size: 9px;
-  font-weight: 400;
 }
 
 .grid {
@@ -325,6 +311,65 @@
   border-color: var(--border-default);
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.skeletonCard {
+  min-height: 150px;
+  padding: 14px 15px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.skeletonTitle,
+.skeletonMeta,
+.skeletonText,
+.skeletonTextShort {
+  display: block;
+  height: 9px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--bg-active) 25%, var(--bg-hover) 50%, var(--bg-active) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+
+.skeletonTitle {
+  width: 46%;
+  height: 14px;
+}
+
+.skeletonMeta {
+  width: 64%;
+}
+
+.skeletonText {
+  width: 100%;
+  height: 10px;
+}
+
+.skeletonTextShort {
+  width: 82%;
+  height: 10px;
+}
+
+.loadingHint {
+  grid-column: 1 / -1;
+  padding: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
 }
 
 .state {
@@ -591,6 +636,41 @@
   font-size: 10px;
 }
 
+.authBox {
+  margin-top: 7px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.authUser {
+  color: #2b9665;
+  font-size: 10.5px;
+}
+
+.authBtn {
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.authBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.authError {
+  color: var(--danger, #b63b3b);
+  font-size: 9.5px;
+}
+
 .removeIconBtn {
   width: 30px;
   height: 30px;
@@ -654,10 +734,6 @@
 
   .card {
     padding: 12px;
-  }
-
-  .countLine {
-    font-size: 10px;
   }
 
   .viewHeader {

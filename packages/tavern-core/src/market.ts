@@ -1,3 +1,13 @@
+/** 需要站点账号的来源插件使用的登录接口配置。 */
+export type MarketAuthConfig = {
+  origin: string
+  loginPath: string
+  registerPath: string
+  sendCodePath: string
+  sessionPath: string
+  logoutPath: string
+}
+
 /** 市场接入的单位是“来源插件”，不是单张卡片；卡片由插件目录提供。 */
 export type MarketplacePlugin = {
   id: string
@@ -15,6 +25,8 @@ export type MarketplacePlugin = {
   allowedPathPrefixes: string[]
   /** 内置插件随应用发布，外部插件通过清单地址订阅 */
   builtin: boolean
+  /** 有值表示需要登录该站点才能下载 */
+  auth?: MarketAuthConfig
 }
 
 /**
@@ -47,6 +59,34 @@ export const BUILTIN_MARKET_PLUGINS: MarketplacePlugin[] = [
     hosts: ['tuniang.app'],
     allowedPathPrefixes: ['/cards/'],
     builtin: true,
+  },
+  {
+    id: 'pixel-tavern',
+    name: '像素酒馆',
+    version: '1.0.0',
+    description: '约 970 张中文原创角色卡；浏览公开，下载需要登录像素酒馆账号。',
+    author: '像素酒馆',
+    homepage: 'https://chat.xstavern.com/market',
+    license: '以站点与作者说明为准',
+    catalogUrl:
+      'https://chat.xstavern.com/api/marketplace.php?action=list&page=1&origin=original&sort=popular',
+    hosts: ['chat.xstavern.com'],
+    allowedPathPrefixes: [
+      '/api/marketplace.php',
+      '/api/market-ranking',
+      '/api/market-stats',
+      '/api/market-card-versions',
+      '/api/resources',
+    ],
+    builtin: true,
+    auth: {
+      origin: 'https://chat.xstavern.com',
+      loginPath: '/api/auth.php?action=login',
+      registerPath: '/api/auth.php?action=register',
+      sendCodePath: '/api/auth.php?action=send_code',
+      sessionPath: '/api/session',
+      logoutPath: '/api/session/logout',
+    },
   },
 ]
 

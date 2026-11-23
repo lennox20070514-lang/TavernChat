@@ -2,6 +2,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core'
 import {
   BUILTIN_MARKET_PLUGINS,
   parseMarketManifest,
+  type MarketAuthConfig,
   type MarketCard,
   type MarketManifest,
   type MarketplacePlugin,
@@ -19,6 +20,19 @@ export type MarketPluginView = {
   builtin: boolean
   manifestUrl?: string
   manifest?: MarketManifest
+  auth?: MarketAuthConfig
+  error?: string
+}
+
+export type MarketAuthUser = {
+  username?: string
+  email?: string
+  [key: string]: unknown
+}
+
+export type MarketAuthStatus = {
+  loggedIn: boolean
+  user?: MarketAuthUser
   error?: string
 }
 
@@ -26,6 +40,12 @@ const MANIFEST_STORAGE_KEY = 'tavern.market.manifestUrls.v1'
 const MANIFEST_CACHE_MS = 5 * 60 * 1000
 const CARDS_CACHE_MS = 2 * 60 * 1000
 const MAX_MANIFESTS = 20
+
+const PIXEL_TAVERN_API = 'https://chat.xstavern.com/api/marketplace.php'
+const PIXEL_TAVERN_PAGES = 5
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
 
 type FetchMode = 'text' | 'bytes'
 
@@ -36,6 +56,9 @@ const friendlyError = (err: unknown): string => {
   const message = err instanceof Error ? err.message : String(err)
   if (/Failed to fetch|NetworkError|Load failed|CORS|跨域/i.test(message)) {
     return '该来源没有开放跨域访问。请使用桌面端/安卓端，或在设置中填写本地网关。'
+  }
+  if (/timeout|timed out|aborted|fetch failed|Connect Timeout/i.test(message)) {
+    return '来源响应超时或连接失败，请稍后重试。'
   }
   return message
 }
@@ -59,14 +82,24 @@ const toBytes = (data: unknown): Uint8Array => {
 const acceptFor = (mode: FetchMode): string =>
   mode === 'bytes' ? 'image/png' : 'text/html,application/json;q=0.9,*/*;q=0.8'
 
-const nativeGet = async (url: string, mode: FetchMode): Promise<string | Uint8Array> => {
+const nativeGet = async (
+  url: string,
+  mode: FetchMode,
+  cookie?: string
+): Promise<string | Uint8Array> => {
   const response = await CapacitorHttp.get({
     url,
     responseType: mode === 'bytes' ? 'arraybuffer' : 'text',
     connectTimeout: 60_000,
     readTimeout: 60_000,
     disableRedirects: true,
-    headers: { Accept: acceptFor(mode) },
+    headers: {
+      Accept: acceptFor(mode),
+      ...(cookie ? { Cookie: cookie } : {}),
+      ...(url.startsWith('https://chat.xstavern.com/')
+        ? { Referer: 'https://chat.xstavern.com/' }
+        : {}),
+    },
   })
   if (response.status < 200 || response.status >= 300) {
     throw new Error('来源返回 HTTP ' + response.status)
@@ -116,10 +149,11 @@ const requestSource = async (
   url: string,
   mode: FetchMode,
   allowGateway: boolean,
-  customOrigin?: string
+  customOrigin?: string,
+  cookie?: string
 ): Promise<string | Uint8Array> => {
   try {
-    if (Capacitor.isNativePlatform()) return await nativeGet(url, mode)
+    if (Capacitor.isNativePlatform()) return await nativeGet(url, mode, cookie)
     if (allowGateway) {
       const gateway = await resolveGatewayOrigin(customOrigin)
       if (gateway !== null) return await gatewayGet(gateway, url, mode)
@@ -133,18 +167,20 @@ const requestSource = async (
 const requestText = async (
   url: string,
   allowGateway: boolean,
-  customOrigin?: string
+  customOrigin?: string,
+  cookie?: string
 ): Promise<string> => {
-  const value = await requestSource(url, 'text', allowGateway, customOrigin)
+  const value = await requestSource(url, 'text', allowGateway, customOrigin, cookie)
   return typeof value === 'string' ? value : new TextDecoder().decode(value)
 }
 
 const requestBytes = async (
   url: string,
   allowGateway: boolean,
-  customOrigin?: string
+  customOrigin?: string,
+  cookie?: string
 ): Promise<Uint8Array> => {
-  const value = await requestSource(url, 'bytes', allowGateway, customOrigin)
+  const value = await requestSource(url, 'bytes', allowGateway, customOrigin, cookie)
   return typeof value === 'string' ? new TextEncoder().encode(value) : value
 }
 
@@ -250,6 +286,88 @@ const parseTuniang = (plugin: MarketplacePlugin, html: string): MarketCard[] => 
   return cards
 }
 
+const nativeCookieKey = (pluginId: string): string => `tavern.market.cookie.${pluginId}`
+
+const readNativeCookie = (pluginId: string): string | undefined => {
+  if (!Capacitor.isNativePlatform()) return undefined
+  try {
+    return localStorage.getItem(nativeCookieKey(pluginId)) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+const loadPixelTavernCards = async (
+  plugin: MarketplacePlugin,
+  customOrigin?: string
+): Promise<MarketCard[]> => {
+  const cookie = readNativeCookie(plugin.id)
+  const settled = await Promise.allSettled(
+    Array.from({ length: PIXEL_TAVERN_PAGES }, (_, index) =>
+      requestText(
+        `${PIXEL_TAVERN_API}?action=list&page=${index + 1}&origin=original&sort=popular`,
+        true,
+        customOrigin,
+        cookie
+      )
+    )
+  )
+
+  const cards: MarketCard[] = []
+  const seen = new Set<string>()
+  let firstError: unknown = null
+
+  for (const result of settled) {
+    if (result.status !== 'fulfilled') {
+      firstError ??= result.reason
+      continue
+    }
+    let data: unknown
+    try {
+      data = JSON.parse(result.value)
+    } catch {
+      continue
+    }
+    if (!isRecord(data) || data.success !== true || !Array.isArray(data.cards)) continue
+
+    for (const raw of data.cards) {
+      if (!isRecord(raw)) continue
+      const slug = typeof raw.slug === 'string' ? raw.slug : ''
+      const name = typeof raw.name === 'string' ? raw.name : ''
+      if (!slug || !name || seen.has(slug) || raw.nsfw === true) continue
+      seen.add(slug)
+      const tags = Array.isArray(raw.tags)
+        ? raw.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 12)
+        : []
+      cards.push({
+        id: plugin.id + ':' + slug,
+        pluginId: plugin.id,
+        pluginName: plugin.name,
+        name,
+        description: typeof raw.description === 'string' ? raw.description : '',
+        creator:
+          typeof raw.author === 'string' && raw.author.trim() !== ''
+            ? raw.author.trim()
+            : '像素酒馆作者',
+        kind: 'character',
+        sourceUrl: `https://chat.xstavern.com/market?search=${encodeURIComponent(name)}`,
+        downloadUrl: `${PIXEL_TAVERN_API}?action=download&format=json&slug=${encodeURIComponent(slug)}`,
+        fileName: slug + '.json',
+        tags,
+        license: '以站点与作者说明为准',
+        licenseUrl: 'https://chat.xstavern.com/market',
+      })
+    }
+  }
+
+  if (cards.length === 0) {
+    throw new Error(
+      firstError ? friendlyError(firstError) : '像素酒馆暂时没有返回可浏览的卡片'
+    )
+  }
+  return cards
+}
+
 const BUILTIN_PARSERS: Record<string, (plugin: MarketplacePlugin, html: string) => MarketCard[]> = {
   'bae-ppl-studio': parseBae,
   'tuniang-foreverse': parseTuniang,
@@ -312,6 +430,7 @@ export async function listMarketPlugins(): Promise<MarketPluginView[]> {
     homepage: plugin.homepage,
     license: plugin.license,
     builtin: true,
+    auth: plugin.auth,
   }))
 
   const subscribed = await Promise.all(
@@ -429,6 +548,14 @@ export async function loadMarketCards(
   if (cached && cached.expiresAt > Date.now()) return cached.cards
 
   const definition = BUILTIN_MARKET_PLUGINS.find((entry) => entry.id === plugin.id)
+
+  if (plugin.id === 'pixel-tavern') {
+    if (!definition) throw new Error('像素酒馆来源配置缺失')
+    const cards = await loadPixelTavernCards(definition, customOrigin)
+    cardsCache.set(cachedKey, { expiresAt: Date.now() + CARDS_CACHE_MS, cards })
+    return cards
+  }
+
   const parser = definition ? BUILTIN_PARSERS[definition.id] : undefined
   if (!definition || !parser) throw new Error('这个内置插件没有可用的目录解析器')
 
@@ -444,7 +571,7 @@ export async function downloadMarketCard(
   builtin: boolean,
   customOrigin?: string
 ): Promise<Uint8Array> {
-  return requestBytes(card.downloadUrl, builtin, customOrigin)
+  return requestBytes(card.downloadUrl, builtin, customOrigin, readNativeCookie(card.pluginId))
 }
 
 export async function addManifestPlugin(rawUrl: string): Promise<MarketPluginView> {
