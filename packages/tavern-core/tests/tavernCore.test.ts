@@ -314,7 +314,7 @@ test('Real SillyTavern sample files (PNG / World JSON / Preset / Group / Chat JS
   }
 })
 
-test('market plugin manifests validate HTTPS PNG cards and builtin allowlists stay consistent', () => {
+test('market plugin manifests validate HTTPS resources and builtin allowlists stay consistent', () => {
   const manifest = parseMarketManifest({
     schema: 1,
     id: 'demo-pack',
@@ -337,10 +337,21 @@ test('market plugin manifests validate HTTPS PNG cards and builtin allowlists st
         license: 'CC BY 4.0',
         licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
       },
+      {
+        id: 'world-1',
+        name: '测试世界书',
+        description: '来自测试清单',
+        creator: 'Demo Author',
+        kind: 'world',
+        downloadUrl: 'https://raw.githubusercontent.com/example/pack/main/world-1.json',
+        fileName: 'world-1.json',
+        tags: ['世界观'],
+      },
     ],
   })
-  assert.equal(manifest.cards.length, 1)
-  assert.equal(manifest.cards[0]?.name, '测试角色')
+  assert.equal(manifest.cards.length, 2)
+  assert.equal(manifest.cards[0]?.kind, 'character')
+  assert.equal(manifest.cards[1]?.kind, 'world')
 
   assert.throws(
     () =>
@@ -376,12 +387,34 @@ test('market plugin manifests validate HTTPS PNG cards and builtin allowlists st
             id: 'bad-1',
             name: 'Bad',
             creator: 'Bad',
-            downloadUrl: 'https://example.com/card.json',
-            fileName: 'card.json',
+            downloadUrl: 'https://example.com/card.txt',
+            fileName: 'card.txt',
           },
         ],
       }),
-    /PNG/
+    /PNG 或 JSON/
+  )
+
+  assert.throws(
+    () =>
+      parseMarketManifest({
+        schema: 1,
+        id: 'bad',
+        name: 'Bad',
+        version: '1.0.0',
+        author: 'Bad',
+        cards: [
+          {
+            id: 'bad-world',
+            name: 'Bad World',
+            creator: 'Bad',
+            kind: 'world',
+            downloadUrl: 'https://example.com/world.png',
+            fileName: 'world.png',
+          },
+        ],
+      }),
+    /JSON/
   )
 
   for (const plugin of BUILTIN_MARKET_PLUGINS) {

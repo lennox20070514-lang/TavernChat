@@ -306,6 +306,66 @@ export async function listMarketPlugins(): Promise<MarketPluginView[]> {
   return [...builtin, ...subscribed]
 }
 
+export type MarketSourceStatus = {
+  id: string
+  name: string
+  builtin: boolean
+  count: number
+  error?: string
+}
+
+export type MarketCatalog = {
+  cards: MarketCard[]
+  sources: MarketSourceStatus[]
+}
+
+export async function loadMarketCatalog(customOrigin?: string): Promise<MarketCatalog> {
+  const plugins = await listMarketPlugins()
+  const results = await Promise.all(
+    plugins.map(async (plugin) => {
+      if (plugin.error) {
+        return {
+          cards: [] as MarketCard[],
+          status: {
+            id: plugin.id,
+            name: plugin.name,
+            builtin: plugin.builtin,
+            count: 0,
+            error: plugin.error,
+          } satisfies MarketSourceStatus,
+        }
+      }
+      try {
+        const cards = await loadMarketCards(plugin, customOrigin)
+        return {
+          cards,
+          status: {
+            id: plugin.id,
+            name: plugin.name,
+            builtin: plugin.builtin,
+            count: cards.length,
+          } satisfies MarketSourceStatus,
+        }
+      } catch (err) {
+        return {
+          cards: [] as MarketCard[],
+          status: {
+            id: plugin.id,
+            name: plugin.name,
+            builtin: plugin.builtin,
+            count: 0,
+            error: friendlyError(err),
+          } satisfies MarketSourceStatus,
+        }
+      }
+    })
+  )
+  return {
+    cards: results.flatMap((result) => result.cards),
+    sources: results.map((result) => result.status),
+  }
+}
+
 export async function loadMarketCards(
   plugin: MarketPluginView,
   customOrigin?: string
@@ -337,11 +397,10 @@ export async function loadMarketCards(
 
 export async function downloadMarketCard(
   card: MarketCard,
-  plugin: MarketPluginView,
+  builtin: boolean,
   customOrigin?: string
 ): Promise<Uint8Array> {
-  if (plugin.error) throw new Error(plugin.error)
-  return requestBytes(card.downloadUrl, plugin.builtin, customOrigin)
+  return requestBytes(card.downloadUrl, builtin, customOrigin)
 }
 
 export async function addManifestPlugin(rawUrl: string): Promise<MarketPluginView> {

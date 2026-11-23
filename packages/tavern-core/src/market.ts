@@ -37,7 +37,10 @@ export const BUILTIN_MARKET_PLUGINS: MarketplacePlugin[] = [
   },
 ]
 
-/** 插件目录里的单张角色卡。 */
+/** 市场目录里的资源类型，与素材库的组件分类对应。 */
+export type MarketResourceKind = 'character' | 'world' | 'rule'
+
+/** 插件目录里的单个资源。 */
 export type MarketCard = {
   id: string
   pluginId: string
@@ -45,7 +48,7 @@ export type MarketCard = {
   name: string
   description: string
   creator: string
-  kind: 'character'
+  kind: MarketResourceKind
   sourceUrl?: string
   downloadUrl: string
   coverUrl?: string
@@ -123,15 +126,26 @@ export function parseMarketManifest(value: unknown): MarketManifest {
     if (seen.has(id)) throw new Error('插件清单存在重复卡片 id：' + id)
     seen.add(id)
     const fileName = cleanString(raw.fileName, `cards[${index}].fileName`)
-    if (!/\.png$/i.test(fileName)) {
-      throw new Error(`第 ${index + 1} 张卡片必须是 PNG：${fileName}`)
+    const kindValue = optionalString(raw.kind) ?? 'character'
+    if (kindValue !== 'character' && kindValue !== 'world' && kindValue !== 'rule') {
+      throw new Error(`第 ${index + 1} 个资源类型无效：${kindValue}`)
+    }
+    const kind: MarketResourceKind = kindValue
+    const extensionOk =
+      kind === 'character' ? /\.(png|json)$/i.test(fileName) : /\.json$/i.test(fileName)
+    if (!extensionOk) {
+      throw new Error(
+        kind === 'character'
+          ? `第 ${index + 1} 张角色卡必须是 PNG 或 JSON：${fileName}`
+          : `第 ${index + 1} 个${kind === 'world' ? '世界书' : '规则预设'}必须是 JSON：${fileName}`
+      )
     }
     return {
       id,
       name: cleanString(raw.name, `cards[${index}].name`),
       description: optionalString(raw.description) ?? '',
       creator: cleanString(raw.creator, `cards[${index}].creator`),
-      kind: 'character' as const,
+      kind,
       sourceUrl: optionalHttpsUrl(raw.sourceUrl, `cards[${index}].sourceUrl`),
       downloadUrl: httpsUrl(raw.downloadUrl, `cards[${index}].downloadUrl`),
       coverUrl: optionalHttpsUrl(raw.coverUrl, `cards[${index}].coverUrl`),
