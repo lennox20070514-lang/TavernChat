@@ -563,10 +563,13 @@ const getMarketJson = async (url: string, cookie?: string) => {
   return { response, data }
 }
 
-const upstreamError = (data: unknown, fallback: string): string =>
-  isRecord(data) && typeof data.error === 'string' && data.error.trim()
-    ? data.error
-    : fallback
+const upstreamError = (data: unknown, fallback: string): string => {
+  if (isRecord(data)) {
+    if (typeof data.error === 'string' && data.error.trim()) return data.error
+    if (typeof data.message === 'string' && data.message.trim()) return data.message
+  }
+  return fallback
+}
 
 export const handleMarketLogin = async (req: IncomingMessage, res: ServerResponse) => {
   let body: JsonRecord

@@ -125,10 +125,13 @@ const findAuthPlugin = (pluginId: string): MarketplacePlugin | null => {
   return plugin?.auth ? plugin : null
 }
 
-const authError = (data: unknown, fallback: string): string =>
-  isRecord(data) && typeof data.error === 'string' && data.error.trim()
-    ? data.error
-    : fallback
+const authError = (data: unknown, fallback: string): string => {
+  if (isRecord(data)) {
+    if (typeof data.error === 'string' && data.error.trim()) return data.error
+    if (typeof data.message === 'string' && data.message.trim()) return data.message
+  }
+  return fallback
+}
 
 export async function getMarketAuthStatus(
   pluginId: string,

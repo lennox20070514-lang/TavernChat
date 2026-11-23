@@ -124,6 +124,9 @@ export const MarketAuthModal = ({ open, plugin, onClose, onLoggedIn }: Props) =>
                   required
                 />
               </label>
+              <p className={styles.fieldHint}>
+                填写邮箱后「发送验证码」才会变为可点；像素酒馆对邮箱域名有白名单，提示不允许时请换用其他邮箱。
+              </p>
               <label className={styles.field}>
                 <span>验证码</span>
                 <div className={styles.codeRow}>
