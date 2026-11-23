@@ -63,8 +63,8 @@ const nativeGet = async (url: string, mode: FetchMode): Promise<string | Uint8Ar
   const response = await CapacitorHttp.get({
     url,
     responseType: mode === 'bytes' ? 'arraybuffer' : 'text',
-    connectTimeout: 40_000,
-    readTimeout: 40_000,
+    connectTimeout: 60_000,
+    readTimeout: 60_000,
     disableRedirects: true,
     headers: { Accept: acceptFor(mode) },
   })
@@ -83,7 +83,7 @@ const gatewayGet = async (
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, as: mode }),
-    signal: AbortSignal.timeout(45_000),
+    signal: AbortSignal.timeout(120_000),
   })
   if (!response.ok) {
     const raw = await response.text().catch(() => '')
@@ -105,7 +105,7 @@ const gatewayGet = async (
 const directGet = async (url: string, mode: FetchMode): Promise<string | Uint8Array> => {
   const response = await fetch(url, {
     headers: { Accept: acceptFor(mode) },
-    signal: AbortSignal.timeout(45_000),
+    signal: AbortSignal.timeout(60_000),
     redirect: 'error',
   })
   if (!response.ok) throw new Error('来源返回 HTTP ' + response.status)
@@ -206,8 +206,53 @@ const parseBae = (plugin: MarketplacePlugin, html: string): MarketCard[] => {
   return cards
 }
 
+const parseTuniang = (plugin: MarketplacePlugin, html: string): MarketCard[] => {
+  const doc = parseHtml(html)
+  const cards: MarketCard[] = []
+  const seen = new Set<string>()
+
+  for (const block of Array.from(doc.querySelectorAll('.cc'))) {
+    const link =
+      block.querySelector<HTMLAnchorElement>('.cc-dl a[href$=".json"]') ??
+      block.querySelector<HTMLAnchorElement>('a[href$=".png"]')
+    const href = link?.getAttribute('href')
+    if (!link || !href) continue
+    const downloadUrl = absoluteUrl(href, plugin.catalogUrl)
+    if (seen.has(downloadUrl)) continue
+    seen.add(downloadUrl)
+
+    const name = nodeText(block.querySelector('h3'))
+    if (!name) continue
+    const cover = block.querySelector<HTMLImageElement>('img.cc-img, img')
+    const fileName = downloadUrl.split('/').pop() || 'card.json'
+    const credit = nodeText(block.querySelector('.cc-by'))
+    const creator = credit.match(/CC BY 4\.0\s*[·•]\s*([^(]+)/)?.[1]?.trim() || plugin.author
+
+    cards.push({
+      id: plugin.id + ':' + fileName.replace(/\.(png|json)$/i, ''),
+      pluginId: plugin.id,
+      pluginName: plugin.name,
+      name,
+      description: nodeText(block.querySelector('.cc-teaser')),
+      creator,
+      kind: 'character',
+      sourceUrl: plugin.catalogUrl,
+      downloadUrl,
+      coverUrl: cover?.getAttribute('src')
+        ? absoluteUrl(cover.getAttribute('src') ?? '', plugin.catalogUrl)
+        : undefined,
+      fileName,
+      tags: Array.from(block.querySelectorAll('.cc-tags span')).map(nodeText).filter(Boolean),
+      license: plugin.license,
+      licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+    })
+  }
+  return cards
+}
+
 const BUILTIN_PARSERS: Record<string, (plugin: MarketplacePlugin, html: string) => MarketCard[]> = {
   'bae-ppl-studio': parseBae,
+  'tuniang-foreverse': parseTuniang,
 }
 
 const readManifestUrls = (): string[] => {

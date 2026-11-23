@@ -35,6 +35,19 @@ export const BUILTIN_MARKET_PLUGINS: MarketplacePlugin[] = [
     allowedPathPrefixes: ['/tools/character-cards'],
     builtin: true,
   },
+  {
+    id: 'tuniang-foreverse',
+    name: '兔娘 · Foreverse',
+    version: '1.0.0',
+    description: '中文 SFW 角色卡目录，Foreverse 创作、CC BY 4.0；下载走 20KB 的 JSON 卡，网络较慢时可能需要重试。',
+    author: 'Foreverse / 兔娘',
+    homepage: 'https://tuniang.app/cards/',
+    license: 'CC BY 4.0',
+    catalogUrl: 'https://tuniang.app/cards/',
+    hosts: ['tuniang.app'],
+    allowedPathPrefixes: ['/cards/'],
+    builtin: true,
+  },
 ]
 
 /** 市场目录里的资源类型，与素材库的组件分类对应。 */
