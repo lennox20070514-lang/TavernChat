@@ -14,9 +14,11 @@ import {
   exportWorldToSillyTavernJson,
   importSillyTavernCharacterPng,
   importSillyTavernWorldJson,
+  parseMarketManifest,
   scanWorldInfo,
   smartImportFile,
   substituteMacros,
+  BUILTIN_MARKET_PLUGINS,
   type ChatMessage,
   type ChatSession,
 } from '../src/index.ts'
@@ -309,5 +311,85 @@ test('Real SillyTavern sample files (PNG / World JSON / Preset / Group / Chat JS
     const res = smartImportFile(path.basename(chatPath), readFileSync(chatPath, 'utf8'), 'sess_test')
     assert.equal(res.kind, 'chat_jsonl')
     assert.ok(res.messages.length > 0)
+  }
+})
+
+test('market plugin manifests validate HTTPS PNG cards and builtin allowlists stay consistent', () => {
+  const manifest = parseMarketManifest({
+    schema: 1,
+    id: 'demo-pack',
+    name: 'Demo Pack',
+    version: '1.0.0',
+    description: '测试插件',
+    author: 'Demo Author',
+    license: 'CC BY 4.0',
+    cards: [
+      {
+        id: 'card-1',
+        name: '测试角色',
+        description: '来自测试清单',
+        creator: 'Demo Author',
+        kind: 'character',
+        downloadUrl: 'https://raw.githubusercontent.com/example/pack/main/card-1.png',
+        fileName: 'card-1.png',
+        tags: ['测试'],
+        sourceUrl: 'https://example.com/card-1',
+        license: 'CC BY 4.0',
+        licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+      },
+    ],
+  })
+  assert.equal(manifest.cards.length, 1)
+  assert.equal(manifest.cards[0]?.name, '测试角色')
+
+  assert.throws(
+    () =>
+      parseMarketManifest({
+        schema: 1,
+        id: 'bad',
+        name: 'Bad',
+        version: '1.0.0',
+        author: 'Bad',
+        cards: [
+          {
+            id: 'bad-1',
+            name: 'Bad',
+            creator: 'Bad',
+            downloadUrl: 'http://example.com/card.png',
+            fileName: 'card.png',
+          },
+        ],
+      }),
+    /HTTPS/
+  )
+
+  assert.throws(
+    () =>
+      parseMarketManifest({
+        schema: 1,
+        id: 'bad',
+        name: 'Bad',
+        version: '1.0.0',
+        author: 'Bad',
+        cards: [
+          {
+            id: 'bad-1',
+            name: 'Bad',
+            creator: 'Bad',
+            downloadUrl: 'https://example.com/card.json',
+            fileName: 'card.json',
+          },
+        ],
+      }),
+    /PNG/
+  )
+
+  for (const plugin of BUILTIN_MARKET_PLUGINS) {
+    const url = new URL(plugin.catalogUrl)
+    assert.ok(plugin.hosts.includes(url.hostname), `${plugin.id} 主机与目录地址不一致`)
+    assert.ok(
+      plugin.allowedPathPrefixes.some((prefix) => url.pathname.startsWith(prefix)),
+      `${plugin.id} 路径前缀与目录地址不一致`
+    )
   }
 })

@@ -194,6 +194,10 @@ importers:
         version: 7.0.2
 
   apps/server:
+    dependencies:
+      '@tavern-chat/core':
+        specifier: workspace:*
+        version: link:../../packages/tavern-core
     devDependencies:
       '@types/node':
         specifier: ~22.15.0

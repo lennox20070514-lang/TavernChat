@@ -140,12 +140,29 @@ export type ComponentPayloadMap = {
   rule: RulePayload
 }
 
+/** 市场卡片导入后保留的作者与来源，便于署名和追溯。 */
+export type ComponentOrigin = {
+  providerId: string
+  providerName: string
+  listingId: string
+  listingName: string
+  sourceUrl?: string
+  creator: string
+  license?: string
+  licenseUrl?: string
+  version?: string
+  importedAt: number
+  componentKind: ComponentKind
+}
+
 export type ComponentItem<K extends ComponentKind = ComponentKind> = {
   id: string
   kind: K
   name: string
   /** 头像 DataURL 或图标标识（PNG 角色卡导入时会自动保存原图以便无损再导出） */
   avatar?: string
+  /** 市场导入的来源与署名 */
+  origin?: ComponentOrigin
   tags: string[]
   payload: ComponentPayloadMap[K]
   createdAt: number

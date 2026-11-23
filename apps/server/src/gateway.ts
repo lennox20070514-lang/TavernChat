@@ -1,4 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import {
+  BUILTIN_MARKET_PLUGINS,
+  isPngBytes,
+  readCharacterJsonFromPng,
+} from '@tavern-chat/core'
 
 export type ProviderFormat = 'openai' | 'anthropic' | 'ollama'
 
@@ -336,6 +341,116 @@ export const handleChatStreamProxy = async (req: IncomingMessage, res: ServerRes
   }
 }
 
+const MARKET_TEXT_LIMIT = 4 * 1024 * 1024
+const MARKET_BYTES_LIMIT = 6 * 1024 * 1024
+
+const readBodyWithLimit = async (body: ReadableStream<Uint8Array>, limit: number): Promise<Buffer> => {
+  const reader = body.getReader()
+  const chunks: Buffer[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > limit) {
+        await reader.cancel()
+        throw new Error('来源响应超过大小限制')
+      }
+      chunks.push(Buffer.from(value))
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return Buffer.concat(chunks)
+}
+
+/**
+ * 把内置来源插件页面/卡片代理给浏览器和桌面端，解决 CORS。
+ * 只放行插件清单登记过的主机和路径，禁止重定向，限制大小与超时。
+ */
+export const handleMarketProxy = async (req: IncomingMessage, res: ServerResponse) => {
+  let body: JsonRecord
+  try {
+    body = await readJsonBody(req)
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+    return
+  }
+
+  const rawUrl = typeof body.url === 'string' ? body.url : ''
+  const as = body.as === 'bytes' ? 'bytes' : 'text'
+  if (!rawUrl || rawUrl.length > 2000) {
+    sendJson(res, 400, { error: '缺少有效的来源地址' })
+    return
+  }
+
+  let target: URL
+  try {
+    target = new URL(rawUrl)
+  } catch {
+    sendJson(res, 400, { error: '来源地址无效' })
+    return
+  }
+  const allowed = BUILTIN_MARKET_PLUGINS.some(
+    (plugin) =>
+      plugin.hosts.includes(target.hostname) &&
+      plugin.allowedPathPrefixes.some((prefix) => target.pathname.startsWith(prefix))
+  )
+  if (target.protocol !== 'https:' || !allowed) {
+    sendJson(res, 403, { error: '该地址不属于已接入的来源插件' })
+    return
+  }
+
+  try {
+    const upstream = await fetch(target, {
+      signal: AbortSignal.timeout(25_000),
+      redirect: 'error',
+      headers: {
+        Accept: as === 'bytes' ? 'image/png' : 'text/html,application/json;q=0.9,*/*;q=0.8',
+      },
+    })
+    if (!upstream.ok || !upstream.body) {
+      sendJson(res, 502, { error: '来源返回 HTTP ' + upstream.status })
+      return
+    }
+
+    if (as === 'text') {
+      const buffer = await readBodyWithLimit(upstream.body, MARKET_TEXT_LIMIT)
+      sendJson(res, 200, { ok: true, text: new TextDecoder().decode(buffer) })
+      return
+    }
+
+    const contentType = upstream.headers.get('content-type') ?? ''
+    if (!/image\/png/i.test(contentType)) {
+      await upstream.body.cancel()
+      sendJson(res, 502, { error: '来源没有返回 PNG 角色卡' })
+      return
+    }
+    const buffer = await readBodyWithLimit(upstream.body, MARKET_BYTES_LIMIT)
+    try {
+      if (!isPngBytes(buffer)) throw new Error('PNG 签名无效')
+      JSON.parse(readCharacterJsonFromPng(buffer))
+    } catch {
+      sendJson(res, 502, { error: '下载内容不是有效的 SillyTavern PNG 角色卡' })
+      return
+    }
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Content-Length': String(buffer.byteLength),
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    res.end(buffer)
+  } catch (err) {
+    if (!res.writableEnded) {
+      sendJson(res, 502, {
+        error: '读取来源失败：' + (err instanceof Error ? err.message : String(err)),
+      })
+    }
+  }
+}
+
 export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') => {
   return async (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
@@ -358,6 +473,7 @@ export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') =>
           mode,
           capabilities: {
             proxy: true,
+            market: true,
             // 为未来电脑满血版 (PC Pro) 预留能力发现标记
             filesystem: false,
             localRag: false,
@@ -367,6 +483,10 @@ export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') =>
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/models') {
         await handleModelsProxy(req, res)
+        return
+      }
+      if (req.method === 'POST' && reqUrl.pathname === '/api/v1/market/proxy') {
+        await handleMarketProxy(req, res)
         return
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/chat/stream') {
