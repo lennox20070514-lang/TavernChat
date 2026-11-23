@@ -3,7 +3,6 @@ import { Capacitor } from '@capacitor/core'
 import { useEffect, useState } from 'react'
 import { ChatWorkspace } from '../components/chat/ChatWorkspace.tsx'
 import { LibraryModal } from '../components/library/LibraryModal.tsx'
-import { MarketModal } from '../components/market/MarketModal.tsx'
 import { SettingsModal } from '../components/settings/SettingsModal.tsx'
 import { MobileSider, Sider } from '../components/sider/Sider.tsx'
 import { ActiveStageBar } from '../components/stage/ActiveStageBar.tsx'
@@ -56,7 +55,6 @@ export const App = () => {
     void CapacitorApp.addListener('backButton', () => {
       const s = useAppStore.getState()
       if (s.promptPreviewOpen) return s.setPromptPreviewOpen(false)
-      if (s.marketOpen) return s.setMarketOpen(false)
       if (s.settingsOpen) return s.setSettingsOpen(false)
       if (s.libraryOpen) return s.closeLibrary()
       if (s.chatSearchOpen) return s.setChatSearchOpen(false)
@@ -85,7 +83,6 @@ export const App = () => {
       </div>
 
       <LibraryModal />
-      <MarketModal />
       <SettingsModal />
       <PromptPreviewModal />
       <Toast />

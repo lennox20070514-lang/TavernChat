@@ -17,7 +17,6 @@ import {
   IconCopy,
   IconEdit,
   IconEye,
-  IconGlobe,
   IconLayers,
   IconPlus,
   IconRefresh,
@@ -47,7 +46,6 @@ export const ChatWorkspace = () => {
   const previewCurrentPrompt = useAppStore((s) => s.previewCurrentPrompt)
   const setPromptPreviewOpen = useAppStore((s) => s.setPromptPreviewOpen)
   const setMountDrawerOpen = useAppStore((s) => s.setMountDrawerOpen)
-  const setMarketOpen = useAppStore((s) => s.setMarketOpen)
   const chatSearchOpen = useAppStore((s) => s.chatSearchOpen)
   const setChatSearchOpen = useAppStore((s) => s.setChatSearchOpen)
   const searchQuery = useAppStore((s) => s.chatSearchQuery)
@@ -509,14 +507,6 @@ export const ChatWorkspace = () => {
               >
                 <IconLayers size={14} />
                 <span>打开组件库</span>
-              </button>
-              <button
-                type="button"
-                className={styles.actionPill}
-                onClick={() => setMarketOpen(true)}
-              >
-                <IconGlobe size={14} />
-                <span>逛免费素材市场</span>
               </button>
               <button
                 type="button"

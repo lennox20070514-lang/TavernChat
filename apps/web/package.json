@@ -8,8 +8,7 @@
     "dev": "rspack serve -c rspack.config.ts",
     "build": "node -e \"import('node:fs').then(fs => fs.rmSync('dist', { recursive: true, force: true }))\" && node -e \"import('node:child_process').then(cp => process.exit(cp.spawnSync('rspack', ['build', '-c', 'rspack.config.ts'], { stdio: 'inherit', shell: true, env: { ...process.env, NODE_ENV: 'production' } }).status ?? 1))\"",
     "type": "tsc -p tsconfig.json",
-    "apk:sync": "npm run build && cap sync android",
-    "apk:debug": "npm run apk:sync && cd android && gradlew.bat assembleDebug && cd .. && node -e \"import('node:fs').then(fs => { fs.mkdirSync('release', { recursive: true }); fs.copyFileSync('android/app/build/outputs/apk/debug/app-debug.apk', 'release/TavernChat-0.1.0-android-debug.apk') })\""
+    "apk:sync": "npm run build && cap sync android"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.2",

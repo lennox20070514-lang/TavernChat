@@ -1,9 +1,4 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import {
-  isPngBytes,
-  readCharacterJsonFromPng,
-} from '@tavern-chat/core'
-import { findMarketplaceItem, loadMarketplaceCatalog } from './marketSources.ts'
 
 export type ProviderFormat = 'openai' | 'anthropic' | 'ollama'
 
@@ -341,122 +336,6 @@ export const handleChatStreamProxy = async (req: IncomingMessage, res: ServerRes
   }
 }
 
-const MARKET_DOWNLOAD_LIMIT = 5 * 1024 * 1024
-
-/** 每个来源适配器拉取自己的卡片目录，统一映射后再交给市场 UI。 */
-export const handleMarketCatalog = async (_req: IncomingMessage, res: ServerResponse) => {
-  const catalog = await loadMarketplaceCatalog()
-  sendJson(res, 200, { ok: true, ...catalog })
-}
-
-/**
- * 通过本地网关下载所选来源的 PNG，给浏览器提供同源 CORS 入口。
- * 只接受刚才目录适配器返回的条目，并按 provider 限制主机与路径。
- */
-export const handleMarketDownload = async (req: IncomingMessage, res: ServerResponse) => {
-  let body: JsonRecord
-  try {
-    body = await readJsonBody(req)
-  } catch (err) {
-    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
-    return
-  }
-
-  const itemId = typeof body.itemId === 'string' ? body.itemId : ''
-  const item = await findMarketplaceItem(itemId)
-  if (!item?.downloadUrl) {
-    sendJson(res, 404, { error: '这个素材当前没有可用的站内下载源' })
-    return
-  }
-
-  let url: URL
-  try {
-    url = new URL(item.downloadUrl)
-  } catch {
-    sendJson(res, 400, { error: '市场素材来源地址无效' })
-    return
-  }
-  const allowedSource =
-    item.providerId === 'tuniang-foreverse'
-      ? url.hostname === 'tuniang.app' && /^\/cards\/[a-z0-9-]+\.png$/i.test(url.pathname)
-      : item.providerId === 'bae-ppl-studio'
-        ? url.hostname === 'bae.ppl.studio' &&
-          /^\/tools\/character-cards\/files\/bae-[a-z0-9-]+\.png$/i.test(url.pathname)
-        : false
-  if (url.protocol !== 'https:' || !allowedSource) {
-    sendJson(res, 403, { error: '市场来源地址不在受支持的站点范围内' })
-    return
-  }
-
-  try {
-    const upstream = await fetch(url, {
-      signal: AbortSignal.timeout(15_000),
-      redirect: 'error',
-      headers: { Accept: 'image/png' },
-    })
-    if (!upstream.ok || !upstream.body) {
-      sendJson(res, 502, { error: '素材站返回 HTTP ' + upstream.status })
-      return
-    }
-
-    const upstreamType = upstream.headers.get('content-type') ?? ''
-    if (!/image\/png/i.test(upstreamType)) {
-      await upstream.body.cancel()
-      sendJson(res, 502, { error: '素材站没有返回 PNG 角色卡' })
-      return
-    }
-
-    const statedLength = Number(upstream.headers.get('content-length') ?? 0)
-    if (statedLength > MARKET_DOWNLOAD_LIMIT) {
-      await upstream.body.cancel()
-      sendJson(res, 413, { error: '素材超过 5 MB 下载限制' })
-      return
-    }
-
-    const reader = upstream.body.getReader()
-    const chunks: Buffer[] = []
-    let total = 0
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        total += value.byteLength
-        if (total > MARKET_DOWNLOAD_LIMIT) {
-          await reader.cancel()
-          sendJson(res, 413, { error: '素材超过 5 MB 下载限制' })
-          return
-        }
-        chunks.push(Buffer.from(value))
-      }
-    } finally {
-      reader.releaseLock()
-    }
-
-    const bytes = Buffer.concat(chunks)
-    try {
-      if (!isPngBytes(bytes)) throw new Error('PNG 签名无效')
-      JSON.parse(readCharacterJsonFromPng(bytes))
-    } catch {
-      sendJson(res, 502, { error: '下载内容不是有效的 SillyTavern PNG 角色卡' })
-      return
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'image/png',
-      'Content-Length': String(bytes.byteLength),
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff',
-    })
-    res.end(bytes)
-  } catch (err) {
-    if (!res.writableEnded) {
-      sendJson(res, 502, {
-        error: '下载市场素材失败：' + (err instanceof Error ? err.message : String(err)),
-      })
-    }
-  }
-}
-
 export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') => {
   return async (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
@@ -479,7 +358,6 @@ export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') =>
           mode,
           capabilities: {
             proxy: true,
-            market: true,
             // 为未来电脑满血版 (PC Pro) 预留能力发现标记
             filesystem: false,
             localRag: false,
@@ -489,14 +367,6 @@ export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') =>
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/models') {
         await handleModelsProxy(req, res)
-        return
-      }
-      if (req.method === 'GET' && reqUrl.pathname === '/api/v1/market/catalog') {
-        await handleMarketCatalog(req, res)
-        return
-      }
-      if (req.method === 'POST' && reqUrl.pathname === '/api/v1/market/download') {
-        await handleMarketDownload(req, res)
         return
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/chat/stream') {

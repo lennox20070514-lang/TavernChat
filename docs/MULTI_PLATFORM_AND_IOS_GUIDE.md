@@ -23,7 +23,7 @@
 ## 二、Android 端 Demo（Capacitor 原生 APK）
 
 - **形态特点**：一套代码共用纯 TS 核心引擎 `@tavern-chat/core`，角色卡 PNG 编解码、世界书动态触发、Prompt 组装与上下文透视 **100% 离线在手机本地运行**；数据存在手机原生沙盒 IndexedDB，支持安卓硬件返回键逐层关闭弹窗/搜索/抽屉。
-- **打包命令**（需要 Android SDK 与 JDK 21）：
+- **同步与编译命令**：
   ```sh
   corepack pnpm apk:debug
   ```

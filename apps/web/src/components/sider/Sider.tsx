@@ -4,7 +4,6 @@ import { useSettings } from '../../services/settings.ts'
 import { useAppStore } from '../../services/store.ts'
 import {
   IconClose,
-  IconGlobe,
   IconLayers,
   IconPlus,
   IconSearch,
@@ -39,7 +38,6 @@ const SiderInner = ({ mobile }: { mobile: boolean }) => {
   const loadAllMessagesForSearch = useAppStore((s) => s.loadAllMessagesForSearch)
   const deleteSession = useAppStore((s) => s.deleteSession)
   const openLibrary = useAppStore((s) => s.openLibrary)
-  const setMarketOpen = useAppStore((s) => s.setMarketOpen)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const setMobileSiderOpen = useAppStore((s) => s.setMobileSiderOpen)
   const setSiderCollapsed = useSettings((s) => s.setSiderCollapsed)
@@ -185,20 +183,6 @@ const SiderInner = ({ mobile }: { mobile: boolean }) => {
       </div>
 
       <div className={styles.footer}>
-        <button
-          type="button"
-          className={styles.footerBtn}
-          onClick={() => {
-            setMobileSiderOpen(false)
-            setMarketOpen(true)
-          }}
-        >
-          <span className={styles.footerLeft}>
-            <IconGlobe />
-            <span>素材市场</span>
-          </span>
-          <span className={styles.badge}>免费</span>
-        </button>
         <button
           type="button"
           className={styles.footerBtn}

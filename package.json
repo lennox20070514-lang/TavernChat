@@ -12,7 +12,7 @@
     "type": "corepack pnpm --filter @tavern-chat/core type && corepack pnpm --filter @tavern-chat/server type && corepack pnpm --filter @tavern-chat/web type && corepack pnpm --filter @tavern-chat/desktop type",
     "build": "corepack pnpm --filter @tavern-chat/core type && corepack pnpm --filter @tavern-chat/server type && corepack pnpm --filter @tavern-chat/web build",
     "apk:sync": "corepack pnpm --filter @tavern-chat/web apk:sync",
-    "apk:debug": "corepack pnpm --filter @tavern-chat/web apk:debug",
+    "apk:debug": "corepack pnpm --filter @tavern-chat/web apk:sync && cd apps/web/android && gradlew.bat assembleDebug",
     "exe:build": "corepack pnpm --filter @tavern-chat/desktop build"
   }
 }

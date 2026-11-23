@@ -94,7 +94,6 @@ type AppStoreState = {
   toast: ToastMessage | null
 
   // UI 面板开关
-  marketOpen: boolean
   libraryOpen: boolean
   libraryInitialTab: ComponentKind | 'all'
   libraryEditingId: string | null
@@ -110,7 +109,6 @@ type AppStoreState = {
   clearToast: () => void
 
   // UI 控制
-  setMarketOpen: (open: boolean) => void
   openLibrary: (tab?: ComponentKind | 'all', editId?: string | null) => void
   closeLibrary: () => void
   setMountDrawerOpen: (open: boolean) => void
@@ -168,7 +166,6 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   streamingBySession: {},
   toast: null,
 
-  marketOpen: false,
   libraryOpen: false,
   libraryInitialTab: 'all',
   libraryEditingId: null,
@@ -189,7 +186,6 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   clearToast: () => set({ toast: null }),
 
-  setMarketOpen: (marketOpen) => set({ marketOpen }),
   openLibrary: (tab = 'all', editId = null) =>
     set({ libraryOpen: true, libraryInitialTab: tab, libraryEditingId: editId }),
   closeLibrary: () => set({ libraryOpen: false, libraryEditingId: null }),

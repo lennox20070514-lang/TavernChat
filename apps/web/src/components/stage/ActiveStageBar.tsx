@@ -7,7 +7,6 @@ import {
   IconPanelRight,
   IconSearch,
   IconSidebar,
-  IconGlobe,
 } from '../base/icons.tsx'
 import styles from './ActiveStageBar.module.css'
 
@@ -27,7 +26,6 @@ export const ActiveStageBar = ({ isMobile }: { isMobile: boolean }) => {
   const chatSearchOpen = useAppStore((s) => s.chatSearchOpen)
   const setChatSearchOpen = useAppStore((s) => s.setChatSearchOpen)
   const setMobileSiderOpen = useAppStore((s) => s.setMobileSiderOpen)
-  const setMarketOpen = useAppStore((s) => s.setMarketOpen)
   const renameSession = useAppStore((s) => s.renameSession)
 
   const [editingTitle, setEditingTitle] = useState(false)
@@ -94,15 +92,6 @@ export const ActiveStageBar = ({ isMobile }: { isMobile: boolean }) => {
       </div>
 
       <div className={styles.right}>
-        <button
-          type="button"
-          className={styles.drawerBtn}
-          title="浏览免费角色卡与世界书"
-          onClick={() => setMarketOpen(true)}
-        >
-          <IconGlobe size={15} />
-          <span>市场</span>
-        </button>
         <button
           type="button"
           className={clsx(styles.iconBtn, chatSearchOpen && styles.iconBtnActive)}
