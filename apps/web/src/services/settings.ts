@@ -29,9 +29,9 @@ export const PROVIDER_TEMPLATES: ProviderPresetTemplate[] = [
     name: 'DeepSeek',
     format: 'openai',
     baseUrl: 'https://api.deepseek.com',
-    defaultModel: 'deepseek-chat',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
-    hint: '官方 API，中文叙事与性价比极佳',
+    defaultModel: 'deepseek-flash',
+    models: ['deepseek-flash', 'deepseek-v4-pro'],
+    hint: '官方 V4：Flash 快、Pro 强，1M 上下文',
   },
   {
     key: 'openai',
@@ -110,10 +110,33 @@ const DEFAULT_PROVIDERS: ProviderConfig[] = [
     format: 'openai',
     baseUrl: 'https://api.deepseek.com',
     apiKey: '',
-    model: 'deepseek-chat',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    model: 'deepseek-flash',
+    models: ['deepseek-flash', 'deepseek-v4-pro'],
   },
 ]
+
+const LEGACY_DEEPSEEK_MODELS = new Set(['deepseek-chat', 'deepseek-reasoner'])
+
+function migrateProvider(provider: ProviderConfig): ProviderConfig {
+  if (!/api\.deepseek\.com/i.test(provider.baseUrl)) return provider
+  const hasLegacy =
+    LEGACY_DEEPSEEK_MODELS.has(provider.model) ||
+    provider.models.some((model) => LEGACY_DEEPSEEK_MODELS.has(model))
+  if (!hasLegacy) return provider
+  const model =
+    provider.model === 'deepseek-chat'
+      ? 'deepseek-flash'
+      : provider.model === 'deepseek-reasoner'
+        ? 'deepseek-v4-pro'
+        : provider.model
+  const custom = provider.models.filter(
+    (entry) =>
+      !LEGACY_DEEPSEEK_MODELS.has(entry) &&
+      entry !== 'deepseek-flash' &&
+      entry !== 'deepseek-v4-pro'
+  )
+  return { ...provider, model, models: ['deepseek-flash', 'deepseek-v4-pro', ...custom] }
+}
 
 function loadSettings(): SettingsState {
   const defaults: SettingsState = {
@@ -132,7 +155,7 @@ function loadSettings(): SettingsState {
     const parsed = JSON.parse(raw) as Partial<SettingsState>
     const providers =
       Array.isArray(parsed.providers) && parsed.providers.length > 0
-        ? parsed.providers
+        ? parsed.providers.map(migrateProvider)
         : defaults.providers
     const activeId =
       typeof parsed.activeProviderId === 'string' &&

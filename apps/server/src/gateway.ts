@@ -108,6 +108,10 @@ export const handleModelsProxy = async (req: IncomingMessage, res: ServerRespons
     sendJson(res, 400, { ok: false, error: 'Base URL 不能为空' })
     return
   }
+  if (format !== 'ollama' && !apiKey) {
+    sendJson(res, 400, { ok: false, error: '请先填写 API Key' })
+    return
+  }
 
   const urls = buildModelsUrls(baseUrl, format)
   let lastError = '无法连接模型接口'
@@ -129,6 +133,10 @@ export const handleModelsProxy = async (req: IncomingMessage, res: ServerRespons
         signal: AbortSignal.timeout(12_000),
       })
       if (!upstream.ok) {
+        if (upstream.status === 401) {
+          sendJson(res, 401, { ok: false, error: 'API Key 无效或未填写（HTTP 401）' })
+          return
+        }
         const text = await upstream.text().catch(() => upstream.statusText)
         lastError = `HTTP ${upstream.status}: ${text.slice(0, 180)}`
         continue

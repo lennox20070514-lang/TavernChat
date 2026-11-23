@@ -68,6 +68,10 @@ export const SettingsModal = () => {
   }
 
   const handleFetchModels = async () => {
+    if (active.format !== 'ollama' && !active.apiKey.trim()) {
+      showToast('请先填写 API Key，再拉取模型列表', 'info')
+      return
+    }
     setFetchingModels(true)
     try {
       const models = await fetchProviderModels(active, settings.customGatewayOrigin)
@@ -81,7 +85,11 @@ export const SettingsModal = () => {
         showToast(`已获取 ${models.length} 个可用模型`, 'success')
       }
     } catch (err) {
-      showToast(`拉取模型失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+      const raw = err instanceof Error ? err.message : String(err)
+      const message = /401|authentication|api key/i.test(raw)
+        ? 'API Key 无效或未填写，请检查后重试'
+        : raw
+      showToast(`拉取模型失败：${message}`, 'error')
     } finally {
       setFetchingModels(false)
     }
@@ -199,10 +207,18 @@ export const SettingsModal = () => {
                   <input
                     className={styles.input}
                     type="password"
-                    placeholder={active.format === 'ollama' ? '本地模型可留空' : 'sk-...'}
+                    placeholder={
+                      active.format === 'ollama' ? '本地模型可留空' : '粘贴 API Key（sk-...）'
+                    }
                     value={active.apiKey}
                     onChange={(e) => updateActive({ apiKey: e.target.value })}
                   />
+                  <div className={styles.hint}>
+                    需要先在对应平台创建 API Key；仅保存在本机。
+                    {/api\.deepseek\.com/i.test(active.baseUrl)
+                      ? ' DeepSeek 官方 V4 模型为 deepseek-flash / deepseek-v4-pro。'
+                      : ''}
+                  </div>
                 </div>
 
                 <div className={styles.field}>

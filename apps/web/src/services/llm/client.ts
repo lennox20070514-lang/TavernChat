@@ -67,6 +67,9 @@ export async function fetchProviderModels(
   provider: Pick<ProviderConfig, 'baseUrl' | 'apiKey' | 'format'>,
   customGatewayOrigin?: string
 ): Promise<string[]> {
+  if (provider.format !== 'ollama' && !provider.apiKey.trim()) {
+    throw new Error('请先填写 API Key')
+  }
   const gateway = await resolveGatewayOrigin(customGatewayOrigin)
   if (gateway !== null) {
     const res = await fetch(`${gateway}/api/v1/models`, {
