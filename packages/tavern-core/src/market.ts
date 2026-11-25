@@ -88,6 +88,67 @@ export const BUILTIN_MARKET_PLUGINS: MarketplacePlugin[] = [
       logoutPath: '/api/session/logout',
     },
   },
+  {
+    id: 'chub-ai',
+    name: 'Chub.ai 开源社区',
+    version: '1.0.0',
+    description:
+      '全球开放式酒馆社区全年龄（SFW）精选：支持角色卡 PNG、世界书 Lorebook 与规则预设直下免登录，并支持全站搜索。',
+    author: 'Chub.ai Community',
+    homepage: 'https://chub.ai',
+    license: '以站点与作者卡片说明为准',
+    catalogUrl:
+      'https://gateway.chub.ai/search?first=24&page=1&sort=star_count&nsfw=false&namespace=characters&topics=SFW&min_tokens=150',
+    hosts: ['gateway.chub.ai', 'api.chub.ai', 'avatars.charhub.io'],
+    allowedPathPrefixes: [
+      '/search',
+      '/api/characters/',
+      '/api/lorebooks/',
+      '/api/presets/',
+      '/avatars/',
+    ],
+    builtin: true,
+  },
+  {
+    id: 'chub-zh',
+    name: 'Chub · 中文与二次元',
+    version: '1.0.0',
+    description: 'Chub 开源社区全年龄（SFW）中文角色、二次元动漫向角色与中文世界书合集，免登录直接下载。',
+    author: 'Chub.ai Community',
+    homepage: 'https://chub.ai',
+    license: '以站点与作者卡片说明为准',
+    catalogUrl:
+      'https://gateway.chub.ai/search?first=20&page=1&sort=star_count&nsfw=false&namespace=characters&search=%E4%B8%AD%E6%96%87',
+    hosts: ['gateway.chub.ai', 'api.chub.ai', 'avatars.charhub.io'],
+    allowedPathPrefixes: [
+      '/search',
+      '/api/characters/',
+      '/api/lorebooks/',
+      '/api/presets/',
+      '/avatars/',
+    ],
+    builtin: true,
+  },
+  {
+    id: 'chub-rpg',
+    name: 'Chub · 奇幻冒险与助手',
+    version: '1.0.0',
+    description: 'Chub 开源社区 SFW 奇幻 RPG 剧情卡、科幻世界观书与实用 AI 助手精选，免登录直接下载。',
+    author: 'Chub.ai Community',
+    homepage: 'https://chub.ai',
+    license: '以站点与作者卡片说明为准',
+    catalogUrl:
+      'https://gateway.chub.ai/search?first=20&page=1&sort=star_count&nsfw=false&namespace=characters&topics=Fantasy&min_tokens=150',
+    hosts: ['gateway.chub.ai', 'api.chub.ai', 'avatars.charhub.io'],
+    allowedPathPrefixes: [
+      '/search',
+      '/api/characters/',
+      '/api/lorebooks/',
+      '/api/presets/',
+      '/avatars/',
+    ],
+    builtin: true,
+  },
 ]
 
 /** 市场目录里的资源类型，与素材库的组件分类对应。 */
@@ -229,5 +290,139 @@ export function parseMarketManifest(value: unknown): MarketManifest {
     homepage: optionalHttpsUrl(value.homepage, 'homepage'),
     license: optionalString(value.license),
     cards,
+  }
+}
+
+const chubFieldString = (record: Record<string, unknown>, key: string): string => {
+  const entry = record[key]
+  if (isRecord(entry)) return optionalString(entry.value) ?? ''
+  return optionalString(entry) ?? ''
+}
+
+const chubFieldNumber = (record: Record<string, unknown>, key: string): number | undefined => {
+  const entry = record[key]
+  if (isRecord(entry) && typeof entry.value === 'number' && Number.isFinite(entry.value)) {
+    return entry.value
+  }
+  return typeof entry === 'number' && Number.isFinite(entry) ? entry : undefined
+}
+
+/** 将 Chub /api/characters/<slug>?full=true 的响应整理为标准 V2 角色卡 JSON。 */
+export function normalizeChubCharacterPayload(
+  raw: unknown,
+  fallbackName = 'Chub Character'
+): Record<string, unknown> {
+  if (!isRecord(raw)) throw new Error('Chub 角色卡响应格式无效')
+  const node = isRecord(raw.node) ? raw.node : raw
+  const def = isRecord(node.definition) ? node.definition : node
+  const name = optionalString(def.name) ?? optionalString(node.name) ?? fallbackName
+  const description = optionalString(def.description) ?? optionalString(node.description) ?? ''
+  const personality = optionalString(def.personality) ?? optionalString(def.tavern_personality) ?? ''
+  const scenario = optionalString(def.scenario) ?? ''
+  const firstMes = optionalString(def.first_message) ?? ''
+  const mesExample = optionalString(def.example_dialogs) ?? ''
+  const systemPrompt = optionalString(def.system_prompt) ?? ''
+  const postHistory = optionalString(def.post_history_instructions) ?? ''
+  const alternateGreetings = Array.isArray(def.alternate_greetings)
+    ? def.alternate_greetings.filter((item): item is string => typeof item === 'string')
+    : []
+
+  const data: Record<string, unknown> = {
+    name,
+    description,
+    personality,
+    scenario,
+    first_mes: firstMes,
+    mes_example: mesExample,
+    system_prompt: systemPrompt,
+    post_history_instructions: postHistory,
+    alternate_greetings: alternateGreetings,
+    tags: stringList(node.topics),
+    ...(isRecord(def.embedded_lorebook) ? { character_book: def.embedded_lorebook } : {}),
+    ...(isRecord(def.extensions) ? { extensions: def.extensions } : {}),
+  }
+
+  return {
+    spec: 'chara_card_v2',
+    spec_version: '2.0',
+    name,
+    description,
+    personality,
+    scenario,
+    first_mes: firstMes,
+    mes_example: mesExample,
+    tags: stringList(node.topics),
+    data,
+  }
+}
+
+/** 将 Chub /api/lorebooks/<slug>?full=true 的响应提取为标准酒馆世界书 JSON。 */
+export function normalizeChubLorebookPayload(
+  raw: unknown,
+  fallbackName = 'Chub Worldbook'
+): Record<string, unknown> {
+  if (!isRecord(raw)) throw new Error('Chub 世界书响应格式无效')
+  const node = isRecord(raw.node) ? raw.node : raw
+  const def = isRecord(node.definition) ? node.definition : node
+  const lore = isRecord(def.embedded_lorebook) ? def.embedded_lorebook : def
+  const entries = lore.entries
+  const hasEntries =
+    (Array.isArray(entries) && entries.length > 0) ||
+    (isRecord(entries) && Object.keys(entries).length > 0)
+  if (!hasEntries) {
+    throw new Error('该 Chub 世界书暂时没有可导入的词条')
+  }
+  return {
+    name:
+      optionalString(lore.name) ??
+      optionalString(def.name) ??
+      optionalString(node.name) ??
+      fallbackName,
+    description: optionalString(lore.description) ?? optionalString(node.description) ?? '',
+    scan_depth: typeof lore.scan_depth === 'number' ? lore.scan_depth : 4,
+    token_budget: typeof lore.token_budget === 'number' ? lore.token_budget : 0,
+    recursive_scanning: Boolean(lore.recursive_scanning),
+    entries,
+  }
+}
+
+/** 将 Chub /api/presets/<slug>?full=true 的响应转为标准酒馆 OpenAI 预设 JSON。 */
+export function normalizeChubPresetPayload(
+  raw: unknown,
+  fallbackName = 'Chub Preset'
+): Record<string, unknown> {
+  if (!isRecord(raw)) throw new Error('Chub 规则预设响应格式无效')
+  const node = isRecord(raw.node) ? raw.node : raw
+  const outerDef = isRecord(node.definition) ? node.definition : node
+  const innerDef = isRecord(outerDef.definition) ? outerDef.definition : outerDef
+  const cfg = isRecord(innerDef.config) ? innerDef.config : {}
+  const gen = isRecord(cfg.generation_settings) ? cfg.generation_settings : cfg
+
+  const mainParts = [
+    chubFieldString(cfg, 'system_prompt'),
+    chubFieldString(cfg, 'post_history_instructions'),
+    chubFieldString(cfg, 'impersonate_prompt'),
+  ].filter(Boolean)
+
+  const noteObj = cfg.prompt_note
+  const promptNote =
+    isRecord(noteObj) && isRecord(noteObj.note) ? optionalString(noteObj.note.value) ?? '' : ''
+  const jailbreakParts = [chubFieldString(cfg, 'jailbreak_prompt'), promptNote].filter(Boolean)
+
+  if (mainParts.length === 0 && jailbreakParts.length === 0) {
+    const fallbackDesc = optionalString(node.description) ?? optionalString(outerDef.description)
+    if (fallbackDesc) mainParts.push(fallbackDesc)
+  }
+
+  return {
+    name: optionalString(node.name) ?? optionalString(outerDef.name) ?? fallbackName,
+    main_prompt: mainParts.join('\n\n'),
+    jailbreak_prompt: jailbreakParts.join('\n\n'),
+    new_chat_prompt: chubFieldString(cfg, 'chat_separator') || undefined,
+    temperature: chubFieldNumber(gen, 'temperature') ?? chubFieldNumber(cfg, 'temperature'),
+    top_p: chubFieldNumber(gen, 'top_p') ?? chubFieldNumber(cfg, 'top_p'),
+    openai_max_tokens:
+      chubFieldNumber(gen, 'max_length') ?? chubFieldNumber(gen, 'max_new_tokens'),
+    openai_max_context: chubFieldNumber(gen, 'context_length'),
   }
 }

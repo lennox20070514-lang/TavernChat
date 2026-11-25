@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron'
 import { createGatewayHandler } from '../../server/src/gateway.ts'
@@ -35,8 +36,67 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 let localGateway: Server | null = null
+let lanServer: Server | null = null
+let lanPort = 0
 let gatewayOrigin = ''
 let mainWindow: BrowserWindow | null = null
+
+const detectLanIp = (): string => {
+  const interfaces = os.networkInterfaces()
+  const candidates: string[] = []
+  for (const entries of Object.values(interfaces)) {
+    for (const info of entries ?? []) {
+      if (info.family === 'IPv4' && !info.internal) {
+        candidates.push(info.address)
+      }
+    }
+  }
+  return (
+    candidates.find((ip) => ip.startsWith('192.168.')) ??
+    candidates.find((ip) => ip.startsWith('10.')) ??
+    candidates.find((ip) => /^172\.(1[6-9]|2\d|3[01])\./.test(ip)) ??
+    candidates[0] ??
+    '127.0.0.1'
+  )
+}
+
+const getLanStatusInfo = () => {
+  if (!lanServer || !lanPort) {
+    return { running: false, url: '', ip: detectLanIp(), port: 0 }
+  }
+  const ip = detectLanIp()
+  return { running: true, url: `http://${ip}:${lanPort}`, ip, port: lanPort }
+}
+
+const listenLanOnPort = (webRoot: string, port: number): Promise<Server> =>
+  new Promise((resolve, reject) => {
+    const server = createServer(createGatewayHandler('desktop-embedded', { staticDir: webRoot }))
+    server.once('error', reject)
+    server.listen(port, '0.0.0.0', () => resolve(server))
+  })
+
+const startLanServer = async (webRoot: string) => {
+  if (lanServer && lanPort) return getLanStatusInfo()
+  let lastError: unknown = null
+  for (let p = 18797; p <= 18810; p += 1) {
+    try {
+      const server = await listenLanOnPort(webRoot, p)
+      lanServer = server
+      lanPort = (server.address() as AddressInfo | null)?.port ?? p
+      return getLanStatusInfo()
+    } catch (err) {
+      lastError = err
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('无法占用局域网端口')
+}
+
+const stopLanServer = () => {
+  lanServer?.close()
+  lanServer = null
+  lanPort = 0
+  return getLanStatusInfo()
+}
 
 const startEmbeddedGateway = (): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -131,6 +191,9 @@ if (!singleLock) {
       ipcMain.on('tavern:get-gateway-origin', (event) => {
         event.returnValue = gatewayOrigin
       })
+      ipcMain.handle('tavern:lan-start', () => startLanServer(webRoot))
+      ipcMain.handle('tavern:lan-stop', () => stopLanServer())
+      ipcMain.handle('tavern:lan-status', () => getLanStatusInfo())
 
       createMainWindow()
 
@@ -150,5 +213,7 @@ if (!singleLock) {
   app.on('before-quit', () => {
     localGateway?.close()
     localGateway = null
+    lanServer?.close()
+    lanServer = null
   })
 }

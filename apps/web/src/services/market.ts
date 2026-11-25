@@ -1,11 +1,15 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core'
 import {
   BUILTIN_MARKET_PLUGINS,
+  normalizeChubCharacterPayload,
+  normalizeChubLorebookPayload,
+  normalizeChubPresetPayload,
   parseMarketManifest,
   type MarketAuthConfig,
   type MarketCard,
   type MarketManifest,
   type MarketplacePlugin,
+  type MarketResourceKind,
 } from '@tavern-chat/core'
 import { resolveGatewayOrigin } from './llm/client.ts'
 
@@ -47,6 +51,18 @@ const PIXEL_TAVERN_PAGES = 5
 const PIXEL_TAVERN_LIMIT = 60
 const PIXEL_TAVERN_RESOURCE_PAGES = 2
 
+const CHUB_API_BASE = 'https://gateway.chub.ai'
+const CHUB_AVATAR_BASE = 'https://avatars.charhub.io/avatars'
+const CHUB_BLOCKED_TOPICS = /(nsfw|18\+|erotic|smut|fetish|gore|lewd|hentai|bdsm|noncon|yandere)/i
+const CHUB_PLUGIN_IDS = new Set(['chub-ai', 'chub-zh', 'chub-rpg'])
+
+const looksLikePng = (bytes: Uint8Array): boolean =>
+  bytes.length > 8 &&
+  bytes[0] === 0x89 &&
+  bytes[1] === 0x50 &&
+  bytes[2] === 0x4e &&
+  bytes[3] === 0x47
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -57,8 +73,11 @@ const cardsCache = new Map<string, { expiresAt: number; cards: MarketCard[] }>()
 
 const friendlyError = (err: unknown): string => {
   const message = err instanceof Error ? err.message : String(err)
+  if (/HTTP 402|402/i.test(message)) {
+    return '站方返回 HTTP 402：该卡片在像素酒馆需要积分/VIP 或免费额度已用完。建议切换到免登录开源来源（如 Chub.ai 精选/中文/奇幻库）直接下载。'
+  }
   if (/Failed to fetch|NetworkError|Load failed|CORS|跨域/i.test(message)) {
-    return '该来源没有开放跨域访问。请使用桌面端/安卓端，或在设置中填写本地网关。'
+    return '该来源没有开放跨域访问。请使用桌面端/安卓端，或在设置中连接本地主机。'
   }
   if (/timeout|timed out|aborted|fetch failed|Connect Timeout/i.test(message)) {
     return '来源响应超时或连接失败，请稍后重试。'
@@ -543,31 +562,274 @@ const loadPixelTavernCards = async (
 
 const pixelSearchCache = new Map<string, { expiresAt: number; cards: MarketCard[] }>()
 
+const stripChubNamespacePrefix = (fullPath: string, kind: MarketResourceKind): string => {
+  if (kind === 'world') return fullPath.replace(/^lorebooks\//, '')
+  if (kind === 'rule') return fullPath.replace(/^presets\//, '')
+  return fullPath.replace(/^characters\//, '')
+}
+
+const parseChubNodes = (
+  plugin: MarketplacePlugin,
+  text: string,
+  kind: MarketResourceKind
+): MarketCard[] => {
+  let data: unknown
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return []
+  }
+  const nodes = isRecord(data) && isRecord(data.data) && Array.isArray(data.data.nodes)
+    ? data.data.nodes
+    : []
+  const cards: MarketCard[] = []
+  for (const raw of nodes) {
+    if (!isRecord(raw) || raw.nsfw_image === true || raw.is_unlisted === true) continue
+    const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+    const fullPath = typeof raw.fullPath === 'string' ? raw.fullPath.trim() : ''
+    if (!name || !fullPath) continue
+
+    const topics = Array.isArray(raw.topics)
+      ? raw.topics.filter((t): t is string => typeof t === 'string').slice(0, 12)
+      : []
+    if (topics.some((topic) => CHUB_BLOCKED_TOPICS.test(topic))) continue
+
+    const tagline = typeof raw.tagline === 'string' ? raw.tagline.trim() : ''
+    const description = typeof raw.description === 'string' ? raw.description.trim() : ''
+    if (isBlockedMarketContent(name, tagline, description, topics.join(' '))) continue
+
+    const cleanSlug = stripChubNamespacePrefix(fullPath, kind)
+    const creator = cleanSlug.split('/')[0] || plugin.author
+    const baseName = cleanSlug.split('/').pop() || name
+    const fileSlug = baseName.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]+/g, '_') || 'card'
+    const avatarUrl =
+      typeof raw.avatar_url === 'string' && raw.avatar_url.startsWith('https://')
+        ? raw.avatar_url
+        : undefined
+    const maxResUrl =
+      typeof raw.max_res_url === 'string' && raw.max_res_url.startsWith('https://')
+        ? raw.max_res_url
+        : `${CHUB_AVATAR_BASE}/${cleanSlug}/chara_card_v2.png`
+
+    const sourcePathPrefix =
+      kind === 'world' ? 'lorebooks' : kind === 'rule' ? 'presets' : 'characters'
+    const downloadUrl =
+      kind === 'character'
+        ? maxResUrl
+        : kind === 'world'
+          ? `${CHUB_API_BASE}/api/lorebooks/${cleanSlug}?full=true`
+          : `${CHUB_API_BASE}/api/presets/${cleanSlug}?full=true`
+
+    cards.push({
+      id: `${kind}:${cleanSlug}`,
+      pluginId: plugin.id,
+      pluginName: plugin.name,
+      name,
+      description: tagline || description,
+      summary: description || tagline || undefined,
+      creator,
+      kind,
+      sourceUrl: `https://chub.ai/${sourcePathPrefix}/${cleanSlug}`,
+      downloadUrl,
+      coverUrl: avatarUrl,
+      fileName: kind === 'character' ? `${fileSlug}.png` : `${fileSlug}.json`,
+      tags: topics,
+      license: '以站点与作者卡片说明为准',
+      licenseUrl: `https://chub.ai/${sourcePathPrefix}/${cleanSlug}`,
+      downloadCount: typeof raw.nChats === 'number' ? raw.nChats : undefined,
+      rating: typeof raw.rating === 'number' ? raw.rating : undefined,
+      ratingCount: typeof raw.ratingCount === 'number' ? raw.ratingCount : undefined,
+      createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : undefined,
+    })
+  }
+  return cards
+}
+
+const buildChubRequests = (
+  pluginId: string,
+  page = 1
+): Array<{ kind: MarketResourceKind; url: string }> => {
+  if (pluginId === 'chub-zh') {
+    return [
+      {
+        kind: 'character',
+        url: `${CHUB_API_BASE}/search?first=20&page=${page}&sort=star_count&nsfw=false&namespace=characters&search=${encodeURIComponent('中文')}`,
+      },
+      {
+        kind: 'character',
+        url: `${CHUB_API_BASE}/search?first=18&page=${page}&sort=star_count&nsfw=false&namespace=characters&topics=Anime&min_tokens=150`,
+      },
+      {
+        kind: 'world',
+        url: `${CHUB_API_BASE}/search?first=10&page=${page}&sort=star_count&nsfw=false&namespace=lorebooks&search=${encodeURIComponent('中文')}`,
+      },
+    ]
+  }
+  if (pluginId === 'chub-rpg') {
+    return [
+      {
+        kind: 'character',
+        url: `${CHUB_API_BASE}/search?first=18&page=${page}&sort=star_count&nsfw=false&namespace=characters&topics=Fantasy&min_tokens=150`,
+      },
+      {
+        kind: 'character',
+        url: `${CHUB_API_BASE}/search?first=12&page=${page}&sort=star_count&nsfw=false&namespace=characters&topics=RPG&min_tokens=150`,
+      },
+      {
+        kind: 'character',
+        url: `${CHUB_API_BASE}/search?first=10&page=${page}&sort=star_count&nsfw=false&namespace=characters&topics=${encodeURIComponent('AI assistant')}`,
+      },
+      {
+        kind: 'world',
+        url: `${CHUB_API_BASE}/search?first=12&page=${page}&sort=star_count&nsfw=false&namespace=lorebooks&topics=Fantasy`,
+      },
+    ]
+  }
+  return [
+    {
+      kind: 'character',
+      url: `${CHUB_API_BASE}/search?first=24&page=${page}&sort=star_count&nsfw=false&namespace=characters&topics=SFW&min_tokens=150`,
+    },
+    {
+      kind: 'character',
+      url: `${CHUB_API_BASE}/search?first=12&page=${page}&sort=created_at&nsfw=false&namespace=characters&topics=SFW&min_tokens=150`,
+    },
+    {
+      kind: 'world',
+      url: `${CHUB_API_BASE}/search?first=12&page=${page}&sort=star_count&nsfw=false&namespace=lorebooks&min_tokens=150`,
+    },
+    {
+      kind: 'rule',
+      url: `${CHUB_API_BASE}/search?first=10&page=${page}&sort=star_count&nsfw=false&namespace=presets`,
+    },
+  ]
+}
+
+const loadChubCards = async (
+  plugin: MarketplacePlugin,
+  customOrigin?: string,
+  page = 1
+): Promise<MarketCard[]> => {
+  const requests = buildChubRequests(plugin.id, page)
+  const settled = await Promise.allSettled(
+    requests.map((item) => requestText(item.url, false, customOrigin))
+  )
+  const cards: MarketCard[] = []
+  const seen = new Set<string>()
+  const seenTitleCreator = new Set<string>()
+  for (let i = 0; i < requests.length; i += 1) {
+    const res = settled[i]
+    if (!res || res.status !== 'fulfilled') continue
+    for (const card of parseChubNodes(plugin, res.value, requests[i]!.kind)) {
+      const titleKey = `${card.kind}:${card.name.toLowerCase()}:${card.creator.toLowerCase()}`
+      if (seen.has(card.id) || seenTitleCreator.has(titleKey)) continue
+      seen.add(card.id)
+      seenTitleCreator.add(titleKey)
+      cards.push(card)
+    }
+  }
+  if (cards.length === 0) {
+    const reason = settled.find((item): item is PromiseRejectedResult => item.status === 'rejected')?.reason
+    throw new Error(reason ? friendlyError(reason) : 'Chub.ai 暂时没有返回可浏览的卡片')
+  }
+  return cards
+}
+
+export async function loadMoreMarketCards(
+  page: number,
+  customOrigin?: string
+): Promise<MarketCard[]> {
+  const chubPlugins = BUILTIN_MARKET_PLUGINS.filter((p) => CHUB_PLUGIN_IDS.has(p.id))
+  const settled = await Promise.allSettled(
+    chubPlugins.map((plugin) => loadChubCards(plugin, customOrigin, page))
+  )
+  const cards: MarketCard[] = []
+  const seen = new Set<string>()
+  for (const res of settled) {
+    if (res.status !== 'fulfilled') continue
+    for (const card of res.value) {
+      if (seen.has(card.id)) continue
+      seen.add(card.id)
+      cards.push(card)
+    }
+  }
+  return cards
+}
+
+const searchChubCards = async (
+  plugin: MarketplacePlugin,
+  trimmedQuery: string,
+  customOrigin?: string
+): Promise<MarketCard[]> => {
+  const q = encodeURIComponent(trimmedQuery)
+  const requests: Array<{ kind: MarketResourceKind; url: string }> = [
+    {
+      kind: 'character',
+      url: `${CHUB_API_BASE}/search?first=16&page=1&sort=star_count&nsfw=false&namespace=characters&search=${q}`,
+    },
+    {
+      kind: 'world',
+      url: `${CHUB_API_BASE}/search?first=8&page=1&sort=star_count&nsfw=false&namespace=lorebooks&search=${q}`,
+    },
+    {
+      kind: 'rule',
+      url: `${CHUB_API_BASE}/search?first=6&page=1&sort=star_count&nsfw=false&namespace=presets&search=${q}`,
+    },
+  ]
+  const settled = await Promise.allSettled(
+    requests.map((item) => requestText(item.url, false, customOrigin))
+  )
+  const cards: MarketCard[] = []
+  const seen = new Set<string>()
+  const seenTitleCreator = new Set<string>()
+  for (let i = 0; i < requests.length; i += 1) {
+    const res = settled[i]
+    if (!res || res.status !== 'fulfilled') continue
+    for (const card of parseChubNodes(plugin, res.value, requests[i]!.kind)) {
+      const titleKey = `${card.kind}:${card.name.toLowerCase()}:${card.creator.toLowerCase()}`
+      if (seen.has(card.id) || seenTitleCreator.has(titleKey)) continue
+      seen.add(card.id)
+      seenTitleCreator.add(titleKey)
+      cards.push(card)
+    }
+  }
+  return cards
+}
+
 export async function searchMarketCards(
   query: string,
   customOrigin?: string
 ): Promise<MarketCard[]> {
   const trimmed = query.trim()
   if (!trimmed) return []
-  const plugin = BUILTIN_MARKET_PLUGINS.find((entry) => entry.id === 'pixel-tavern')
-  if (!plugin) return []
   const cacheKey = trimmed.toLocaleLowerCase()
   const cached = pixelSearchCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return cached.cards
 
-  const cookie = readNativeCookie(plugin.id)
+  const pixelPlugin = BUILTIN_MARKET_PLUGINS.find((entry) => entry.id === 'pixel-tavern')
+  const chubPlugin = BUILTIN_MARKET_PLUGINS.find((entry) => entry.id === 'chub-ai')
   const gateway = await resolveGatewayOrigin(customOrigin)
-  const settled = await Promise.allSettled(
-    [1, 2].map((page) =>
-      requestText(
-        `${PIXEL_TAVERN_API}?action=list&page=${page}&sort=popular&limit=24&search=${encodeURIComponent(trimmed)}`,
-        true,
-        customOrigin,
-        cookie
-      )
-    )
-  )
-  const { cards } = collectPixelCards(plugin, settled, gateway)
+
+  const [pixelSettled, chubCardsSettled] = await Promise.allSettled([
+    pixelPlugin
+      ? Promise.allSettled(
+          [1, 2].map((page) =>
+            requestText(
+              `${PIXEL_TAVERN_API}?action=list&page=${page}&sort=popular&limit=24&search=${encodeURIComponent(trimmed)}`,
+              true,
+              customOrigin,
+              readNativeCookie(pixelPlugin.id)
+            )
+          )
+        ).then((settled) => collectPixelCards(pixelPlugin, settled, gateway).cards)
+      : Promise.resolve([]),
+    chubPlugin ? searchChubCards(chubPlugin, trimmed, customOrigin) : Promise.resolve([]),
+  ])
+
+  const cards: MarketCard[] = []
+  if (pixelSettled.status === 'fulfilled') cards.push(...pixelSettled.value)
+  if (chubCardsSettled.status === 'fulfilled') cards.push(...chubCardsSettled.value)
+
   pixelSearchCache.set(cacheKey, { expiresAt: Date.now() + CARDS_CACHE_MS, cards })
   return cards
 }
@@ -770,6 +1032,13 @@ export async function loadMarketCards(
     return cards
   }
 
+  if (CHUB_PLUGIN_IDS.has(plugin.id)) {
+    if (!definition) throw new Error('Chub.ai 来源配置缺失')
+    const cards = await loadChubCards(definition, customOrigin)
+    cardsCache.set(cachedKey, { expiresAt: Date.now() + CARDS_CACHE_MS, cards })
+    return cards
+  }
+
   const parser = definition ? BUILTIN_PARSERS[definition.id] : undefined
   if (!definition || !parser) throw new Error('这个内置插件没有可用的目录解析器')
 
@@ -785,6 +1054,33 @@ export async function downloadMarketCard(
   builtin: boolean,
   customOrigin?: string
 ): Promise<Uint8Array> {
+  if (CHUB_PLUGIN_IDS.has(card.pluginId)) {
+    if (card.kind === 'world' || card.kind === 'rule') {
+      const jsonText = await requestText(card.downloadUrl, false, customOrigin)
+      const parsed: unknown = JSON.parse(jsonText)
+      const normalized =
+        card.kind === 'world'
+          ? normalizeChubLorebookPayload(parsed, card.name)
+          : normalizeChubPresetPayload(parsed, card.name)
+      return new TextEncoder().encode(JSON.stringify(normalized))
+    }
+
+    try {
+      const pngBytes = await requestBytes(card.downloadUrl, false, customOrigin)
+      if (looksLikePng(pngBytes)) return pngBytes
+    } catch {
+      // 如果头像地址缺少内嵌 V2 PNG，自动回退读取 Chub 角色卡 API JSON
+    }
+    const slug = card.id.replace(/^character:/, '')
+    const detailText = await requestText(
+      `${CHUB_API_BASE}/api/characters/${slug}?full=true`,
+      false,
+      customOrigin
+    )
+    const normalized = normalizeChubCharacterPayload(JSON.parse(detailText), card.name)
+    return new TextEncoder().encode(JSON.stringify(normalized))
+  }
+
   return requestBytes(card.downloadUrl, builtin, customOrigin, readNativeCookie(card.pluginId))
 }
 

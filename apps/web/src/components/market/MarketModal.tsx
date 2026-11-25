@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   smartImportFile,
   type ComponentItem,
@@ -14,6 +14,7 @@ import {
   downloadMarketCard,
   listMarketPlugins,
   loadMarketCatalog,
+  loadMoreMarketCards,
   removeManifestPlugin,
   searchMarketCards,
   type MarketCatalog,
@@ -33,7 +34,6 @@ import {
   IconRefresh,
   IconSearch,
   IconTrash,
-  IconUpload,
 } from '../base/icons.tsx'
 import { Modal } from '../base/Modal.tsx'
 import { MarketAuthModal } from './MarketAuthModal.tsx'
@@ -44,6 +44,7 @@ type MarketView = 'catalog' | 'sources'
 type Category = 'all' | MarketResourceKind
 
 const EMPTY_CATALOG: MarketCatalog = { cards: [], sources: [] }
+const REMOTE_SEARCH_PLUGIN_IDS = new Set(['pixel-tavern', 'chub-ai', 'chub-zh', 'chub-rpg'])
 const KIND_ORDER: Record<MarketResourceKind, number> = { character: 0, world: 1, rule: 2 }
 const KIND_LABELS: Record<MarketResourceKind, string> = {
   character: '角色卡',
@@ -75,10 +76,8 @@ export const MarketModal = () => {
   const components = useAppStore((s) => s.components)
   const upsertComponent = useAppStore((s) => s.upsertComponent)
   const deleteComponent = useAppStore((s) => s.deleteComponent)
-  const importFiles = useAppStore((s) => s.importFiles)
   const showToast = useAppStore((s) => s.showToast)
   const settings = useSettings()
-  const importInputRef = useRef<HTMLInputElement>(null)
 
   const [view, setView] = useState<MarketView>('catalog')
   const [catalog, setCatalog] = useState<MarketCatalog>(EMPTY_CATALOG)
@@ -99,7 +98,9 @@ export const MarketModal = () => {
   const [selectedCard, setSelectedCard] = useState<MarketCard | null>(null)
   const [remoteResults, setRemoteResults] = useState<MarketCard[] | null>(null)
   const [searching, setSearching] = useState(false)
-  const [dragging, setDragging] = useState(false)
+  const [page, setPage] = useState(1)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
 
   const refreshCatalog = useCallback(async () => {
     setLoading(true)
@@ -143,12 +144,41 @@ export const MarketModal = () => {
     setView('catalog')
     setQuery('')
     setCategory('all')
+    setPage(1)
+    setHasMore(true)
     setRemoteResults(null)
     setSearching(false)
     setSelectedCard(null)
     void refreshCatalog()
     void refreshPlugins()
   }, [open, refreshCatalog, refreshPlugins])
+
+  const handleLoadMore = async () => {
+    if (loadingMore || !hasMore) return
+    const nextPage = page + 1
+    setLoadingMore(true)
+    try {
+      const extra = await loadMoreMarketCards(nextPage, settings.customGatewayOrigin)
+      if (extra.length === 0) {
+        setHasMore(false)
+      } else {
+        setPage(nextPage)
+        setCatalog((prev) => {
+          const existingKeys = new Set(prev.cards.map(cardKey))
+          const uniqueExtra = extra.filter((card) => !existingKeys.has(cardKey(card)))
+          if (uniqueExtra.length === 0) {
+            setHasMore(false)
+            return prev
+          }
+          return { ...prev, cards: [...prev.cards, ...uniqueExtra] }
+        })
+      }
+    } catch (err) {
+      showToast(errorMessage(err), 'error')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   const installedKeys = useMemo(() => {
     const keys = new Set<string>()
@@ -197,14 +227,23 @@ export const MarketModal = () => {
     const keyword = query.trim().toLocaleLowerCase()
     const searchMode = keyword.length >= 2
     const useRemote = searchMode && remoteResults !== null
-    const sourceCards = useRemote
-      ? [...catalog.cards.filter((card) => card.pluginId !== 'pixel-tavern'), ...remoteResults!]
-      : catalog.cards
+    const merged = new Map<string, MarketCard>()
+    if (useRemote) {
+      for (const card of remoteResults!) merged.set(cardKey(card), card)
+    }
+    for (const card of catalog.cards) {
+      if (!useRemote || !REMOTE_SEARCH_PLUGIN_IDS.has(card.pluginId) || !merged.has(cardKey(card))) {
+        merged.set(cardKey(card), card)
+      }
+    }
+    const sourceCards = Array.from(merged.values())
     return sourceCards
       .filter((card) => category === 'all' || card.kind === category)
       .filter((card) => !onlyInstalled || installedKeys.has(cardKey(card)))
       .filter((card) => {
-        if (useRemote && card.pluginId === 'pixel-tavern') return true
+        if (useRemote && REMOTE_SEARCH_PLUGIN_IDS.has(card.pluginId) && remoteResults!.some((r) => cardKey(r) === cardKey(card))) {
+          return true
+        }
         return keyword === ''
           ? true
           : [card.name, card.description, card.creator, card.pluginName, ...card.tags]
@@ -297,11 +336,6 @@ export const MarketModal = () => {
     await installCard(card)
   }
 
-  const handleImportFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return
-    await importFiles(files)
-  }
-
   const handleRemove = async (card: MarketCard) => {
     const matches = components.filter(
       (component) =>
@@ -369,21 +403,13 @@ export const MarketModal = () => {
         </label>
         <button
           type="button"
-          className={styles.importBtn}
-          onClick={() => importInputRef.current?.click()}
-          title="从本地导入角色卡或世界书"
-        >
-          <IconUpload size={15} />
-          <span>导入</span>
-        </button>
-        <button
-          type="button"
           className={styles.sourcesBtn}
           onClick={() => setView('sources')}
-          title="来源管理"
-          aria-label="来源管理"
+          title="来源管理 · 添加开源社区或自定义卡牌清单"
+          aria-label="来源管理 · 添加来源"
         >
-          <IconGlobe size={16} />
+          <IconGlobe size={15} />
+          <span className={styles.sourcesLabel}>添加来源</span>
         </button>
       </div>
 
@@ -400,7 +426,13 @@ export const MarketModal = () => {
           </span>
           仅显示已下载
         </button>
-        <span className={styles.dropHint}>也可把 PNG / JSON 文件拖进窗口</span>
+        <button
+          type="button"
+          className={styles.sourceTipBtn}
+          onClick={() => setView('sources')}
+        >
+          管理内置源 / 添加自定义源 →
+        </button>
       </div>
 
       <div className={styles.tabs}>
@@ -447,7 +479,7 @@ export const MarketModal = () => {
             ? '正在搜索全部卡牌…'
             : onlyInstalled
               ? '这里还没有已下载的资源。'
-              : '没有匹配的资源。也可以点右上角「导入」从本地添加角色卡。'}
+              : '没有匹配的资源。换个关键词试试，或点右上角「添加来源」订阅更多开源目录。'}
         </div>
       ) : (
         <div className={styles.grid}>
@@ -558,6 +590,16 @@ export const MarketModal = () => {
             </>
           ) : null}
           {searching ? <div className={styles.loadingHint}>正在搜索全部卡牌…</div> : null}
+          {!loading && !searching && !onlyInstalled && hasMore && query.trim().length < 2 && filtered.length > 0 ? (
+            <button
+              type="button"
+              className={styles.loadMoreBtn}
+              disabled={loadingMore}
+              onClick={() => void handleLoadMore()}
+            >
+              {loadingMore ? '正在加载更多卡牌…' : '加载更多开源精选卡片'}
+            </button>
+          ) : null}
         </div>
       )}
     </>
@@ -583,6 +625,13 @@ export const MarketModal = () => {
         >
           <IconRefresh size={14} />
         </button>
+      </div>
+
+      <div className={styles.sourceGuideBanner}>
+        <IconGlobe size={14} />
+        <span>
+          可粘贴自定义清单 JSON 地址（HTTPS，如 GitHub Raw / 镜像地址）订阅更多开源卡包；内置源已包含像素酒馆、Chub.ai（SFW 精选）等。
+        </span>
       </div>
 
       <form className={styles.addRow} onSubmit={handleAddManifest}>
@@ -691,38 +740,7 @@ export const MarketModal = () => {
   return (
     <>
       <Modal open={open} title="卡牌市场" size="lg" onClose={() => setOpen(false)}>
-        <div
-          className={clsx(styles.page, dragging && styles.pageDragging)}
-          onDragEnter={(event) => {
-            event.preventDefault()
-            setDragging(true)
-          }}
-          onDragOver={(event) => {
-            event.preventDefault()
-            setDragging(true)
-          }}
-          onDragLeave={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-              setDragging(false)
-            }
-          }}
-          onDrop={(event) => {
-            event.preventDefault()
-            setDragging(false)
-            void handleImportFiles(event.dataTransfer.files)
-          }}
-        >
-          <input
-            ref={importInputRef}
-            type="file"
-            multiple
-            accept=".png,.json,.jsonl"
-            style={{ display: 'none' }}
-            onChange={(event) => {
-              void handleImportFiles(event.target.files)
-              event.target.value = ''
-            }}
-          />
+        <div className={styles.page}>
           {view === 'catalog' ? renderCatalog() : renderSources()}
         </div>
       </Modal>

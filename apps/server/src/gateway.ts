@@ -1,8 +1,15 @@
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import os from 'node:os'
+import path from 'node:path'
 import {
   BUILTIN_MARKET_PLUGINS,
+  createEmptySyncSnapshot,
   isPngBytes,
+  mergeSyncSnapshots,
+  parseSyncSnapshot,
   readCharacterJsonFromPng,
+  type TavernSyncSnapshot,
 } from '@tavern-chat/core'
 import {
   clearMarketSession,
@@ -40,7 +47,7 @@ export const buildEndpointUrl = (baseUrl: string, format: ProviderFormat): strin
 }
 
 export const buildModelsUrls = (baseUrl: string, format: ProviderFormat): string[] => {
-  const clean = normalizeBaseUrl(baseUrl)
+  const clean = normalizeBaseUrl(baseUrl).replace(/\/(?:chat\/completions|messages)$/i, '')
   if (format === 'ollama') {
     return [`${clean}/v1/models`, `${clean}/api/tags`]
   }
@@ -442,7 +449,23 @@ export const handleMarketProxy = async (req: IncomingMessage, res: ServerRespons
     }
     if (!upstream) throw lastError ?? new Error('来源请求失败')
     if (!upstream.ok || !upstream.body) {
-      sendJson(res, 502, { error: '来源返回 HTTP ' + upstream.status })
+      let detail = ''
+      if (upstream.status === 401 || upstream.status === 402 || upstream.status === 403) {
+        try {
+          const text = await upstream.text()
+          const parsed = JSON.parse(text) as { error?: string; message?: string }
+          detail = parsed.message || parsed.error || ''
+        } catch {
+          // 忽略非 JSON 错误体
+        }
+      } else {
+        await upstream.body?.cancel().catch(() => {})
+      }
+      sendJson(res, upstream.status === 401 || upstream.status === 402 ? upstream.status : 502, {
+        error: detail
+          ? `来源返回 HTTP ${upstream.status}（${detail}）`
+          : '来源返回 HTTP ' + upstream.status,
+      })
       return
     }
 
@@ -842,7 +865,77 @@ export const handleMarketLogout = async (req: IncomingMessage, res: ServerRespon
   sendJson(res, 200, { ok: true })
 }
 
-export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') => {
+const SYNC_FILE_PATH = path.join(os.homedir(), '.tavernchat', 'sync-snapshot.json')
+let cachedSyncSnapshot: TavernSyncSnapshot | null = null
+
+const STATIC_MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+}
+
+async function getServerSyncSnapshot(): Promise<TavernSyncSnapshot> {
+  if (cachedSyncSnapshot) return cachedSyncSnapshot
+  try {
+    const raw = await readFile(SYNC_FILE_PATH, 'utf8')
+    cachedSyncSnapshot = parseSyncSnapshot(JSON.parse(raw))
+  } catch {
+    cachedSyncSnapshot = createEmptySyncSnapshot()
+  }
+  return cachedSyncSnapshot
+}
+
+async function saveServerSyncSnapshot(next: TavernSyncSnapshot): Promise<void> {
+  cachedSyncSnapshot = next
+  await mkdir(path.dirname(SYNC_FILE_PATH), { recursive: true })
+  await writeFile(SYNC_FILE_PATH, JSON.stringify(next), 'utf8')
+}
+
+async function tryServeStatic(staticDir: string, reqPath: string, res: ServerResponse): Promise<boolean> {
+  const root = path.resolve(staticDir)
+  let rel = '/'
+  try {
+    rel = decodeURIComponent(reqPath)
+  } catch {
+    return false
+  }
+  if (rel === '/' || rel === '') rel = '/index.html'
+  const candidate = path.resolve(root, `.${rel}`)
+  if (candidate !== root && !candidate.startsWith(root + path.sep)) return false
+  try {
+    const data = await readFile(candidate)
+    const ext = path.extname(candidate).toLowerCase()
+    res.writeHead(200, { 'Content-Type': STATIC_MIME[ext] ?? 'application/octet-stream' })
+    res.end(data)
+    return true
+  } catch {
+    if (path.extname(rel)) return false
+    try {
+      const html = await readFile(path.join(root, 'index.html'))
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(html)
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
+export type GatewayOptions = {
+  staticDir?: string
+}
+
+export const createGatewayHandler = (
+  mode: 'standalone' | 'desktop-embedded',
+  options?: GatewayOptions
+) => {
   return async (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
@@ -865,11 +958,37 @@ export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') =>
           capabilities: {
             proxy: true,
             market: true,
+            sync: true,
             // 为未来电脑满血版 (PC Pro) 预留能力发现标记
             filesystem: false,
             localRag: false,
           },
         })
+        return
+      }
+      if (req.method === 'GET' && reqUrl.pathname === '/api/v1/sync/snapshot') {
+        const snapshot = await getServerSyncSnapshot()
+        sendJson(res, 200, { ok: true, snapshot })
+        return
+      }
+      if (req.method === 'POST' && reqUrl.pathname === '/api/v1/sync/snapshot') {
+        let body: JsonRecord
+        try {
+          body = await readJsonBody(req)
+        } catch (err) {
+          sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) })
+          return
+        }
+        const incoming = parseSyncSnapshot(body.snapshot ?? body)
+        const current = await getServerSyncSnapshot()
+        const merged = mergeSyncSnapshots(current, incoming)
+        const next: TavernSyncSnapshot = {
+          ...merged,
+          revision: current.revision + 1,
+          updatedAt: Math.max(merged.updatedAt, Date.now()),
+        }
+        await saveServerSyncSnapshot(next)
+        sendJson(res, 200, { ok: true, snapshot: next })
         return
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/models') {
@@ -906,6 +1025,14 @@ export const createGatewayHandler = (mode: 'standalone' | 'desktop-embedded') =>
       }
       if (req.method === 'POST' && reqUrl.pathname === '/api/v1/chat/stream') {
         await handleChatStreamProxy(req, res)
+        return
+      }
+      if (
+        options?.staticDir &&
+        req.method === 'GET' &&
+        !reqUrl.pathname.startsWith('/api/') &&
+        (await tryServeStatic(options.staticDir, reqUrl.pathname, res))
+      ) {
         return
       }
       sendJson(res, 404, { error: 'Not Found' })

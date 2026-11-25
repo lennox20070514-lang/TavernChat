@@ -7,11 +7,6 @@
   color: var(--text-primary);
 }
 
-.pageDragging {
-  outline: 2px dashed var(--accent);
-  outline-offset: -6px;
-}
-
 .topbar {
   flex: 0 0 auto;
   padding: 14px 18px 10px;
@@ -48,11 +43,12 @@
   font-size: 12px;
 }
 
-.importBtn {
+.sourcesBtn {
   height: 36px;
-  padding: 0 11px;
+  padding: 0 10px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   flex: 0 0 auto;
   border: 1px solid var(--accent);
@@ -64,40 +60,25 @@
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
-}
-
-.importBtn:hover {
-  background: var(--accent);
-  color: var(--accent-contrast, white);
-}
-
-.sourcesBtn {
-  height: 36px;
-  min-width: 36px;
-  padding: 0 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-subtle);
-  color: var(--text-secondary);
-  font-size: 10px;
-  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
 }
 
 .sourcesBtn:hover {
-  border-color: var(--border-default);
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.sourcesLabel {
+  line-height: 1;
 }
 
 .filterRow {
   flex: 0 0 auto;
   padding: 0 18px 10px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 10px 12px;
 }
 
 .toggle {
@@ -143,11 +124,21 @@
   transform: translateX(15px);
 }
 
-.dropHint {
+.sourceTipBtn {
   margin-left: auto;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
   color: var(--text-muted);
-  font-size: 9.5px;
+  font: inherit;
+  font-size: 10.5px;
   white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.sourceTipBtn:hover {
+  color: var(--accent);
 }
 
 .tabs {
@@ -405,6 +396,33 @@
   text-align: center;
 }
 
+.loadMoreBtn {
+  grid-column: 1 / -1;
+  height: 36px;
+  margin: 4px auto 6px;
+  padding: 0 18px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.loadMoreBtn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.loadMoreBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 @keyframes shimmer {
   from {
     background-position: 200% 0;
@@ -531,6 +549,27 @@
 .refreshBtn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.sourceGuideBanner {
+  flex: 0 0 auto;
+  margin: 12px 18px 0;
+  padding: 9px 11px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.sourceGuideBanner svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
 }
 
 .addRow {

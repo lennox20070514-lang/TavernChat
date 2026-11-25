@@ -27,6 +27,7 @@ import {
   IconUpload,
 } from '../base/icons.tsx'
 import { HighlightText, MarkdownText } from './MarkdownText.tsx'
+import { copyTextToClipboard } from '../../utils/clipboard.ts'
 import styles from './ChatWorkspace.module.css'
 
 export const ChatWorkspace = () => {
@@ -95,6 +96,14 @@ export const ChatWorkspace = () => {
       .map((m) => map.get(m.componentId))
       .filter((c): c is CharacterComponent => Boolean(c && c.kind === 'character'))
   }, [session, components])
+
+  const povCharacter = useMemo(() => {
+    if (!session?.userCharacterId) return undefined
+    const found = components.find(
+      (c) => c.id === session.userCharacterId && c.kind === 'character'
+    )
+    return found as CharacterComponent | undefined
+  }, [session?.userCharacterId, components])
 
   const tokenEstimate = useMemo(() => {
     const assembled = previewCurrentPrompt(speakerId || undefined)
@@ -189,12 +198,8 @@ export const ChatWorkspace = () => {
   }
 
   const handleCopy = async (content: string) => {
-    try {
-      await navigator.clipboard.writeText(content)
-      showToast('已复制到剪贴板', 'success')
-    } catch {
-      showToast('复制失败', 'error')
-    }
+    const ok = await copyTextToClipboard(content)
+    showToast(ok ? '已复制到剪贴板' : '复制失败', ok ? 'success' : 'error')
   }
 
   const renderMessage = (msg: ChatMessage, idx: number) => {
@@ -381,6 +386,29 @@ export const ChatWorkspace = () => {
             </div>
           ) : null}
         </div>
+
+        {isUser ? (() => {
+          const userAvatar = povCharacter?.avatar || msg.speakerAvatar
+          const userLabel = (povCharacter?.name || msg.speakerName || '我').slice(0, 1)
+          return (
+            <button
+              type="button"
+              className={styles.msgAvatarBtn}
+              title={povCharacter ? `点击编辑「${povCharacter.name}」的头像或设定` : '点击选择我的视角头像'}
+              onClick={() =>
+                povCharacter
+                  ? openLibrary('character', povCharacter.id)
+                  : setMountDrawerOpen(true)
+              }
+            >
+              {userAvatar ? (
+                <img className={styles.msgAvatar} src={userAvatar} alt="" />
+              ) : (
+                <div className={styles.msgAvatar}>{userLabel}</div>
+              )}
+            </button>
+          )
+        })() : null}
       </div>
     )
   }
@@ -414,7 +442,7 @@ export const ChatWorkspace = () => {
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".png,.json,.jsonl"
+        accept=".png,.json,.jsonl,.charx,.zip,.lorebook,.card"
         style={{ display: 'none' }}
         onChange={(e) => {
           if (e.target.files && e.target.files.length > 0) {

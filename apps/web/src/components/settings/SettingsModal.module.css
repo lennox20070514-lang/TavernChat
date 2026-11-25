@@ -1,28 +1,43 @@
 .shell {
   display: flex;
-  height: 520px;
-  max-height: 75vh;
+  height: 540px;
+  max-height: 78vh;
 }
 
 .nav {
   width: 150px;
   border-right: 1px solid var(--border-subtle);
-  padding: 12px 8px;
+  padding: 14px 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
 .navBtn {
-  height: 36px;
+  height: 38px;
   padding: 0 12px;
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   text-align: left;
   font-size: 13.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.navDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
 }
 
 .navBtn:hover {
@@ -31,8 +46,8 @@
 }
 
 .navActive {
-  background: var(--bg-active);
-  color: var(--text-primary);
+  background: var(--accent-soft);
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -40,33 +55,47 @@
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 18px 22px;
+  padding: 18px 20px 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .sectionTitle {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
-  color: var(--text-secondary);
-  margin: 0 0 8px;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.providerHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .providerPills {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
 .pill {
-  height: 30px;
-  padding: 0 11px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border-default);
-  background: var(--bg-base);
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
   font-size: 12.5px;
+  font-weight: 500;
   color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pill:hover {
+  border-color: var(--border-default);
+  color: var(--text-primary);
 }
 
 .pillActive {
@@ -76,32 +105,458 @@
   font-weight: 600;
 }
 
+.addServiceBtn {
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.addServiceBtn:hover,
+.addServiceBtnOpen {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.presetGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+}
+
+.presetCard {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.presetCard:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.presetName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.presetHint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.card {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cardTopRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cardTitle {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 
 .label {
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-secondary);
 }
 
-.input,
-.select {
-  height: 36px;
-  padding: 0 11px;
-  border-radius: var(--radius-sm);
+.labelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.labelActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.linkAction {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.linkAction:hover {
+  text-decoration: underline;
+}
+
+.keySavedRow {
+  height: 42px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.keyMask {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--text-primary);
+  letter-spacing: 0.4px;
+}
+
+.inlineActionBtn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.inlineActionBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.keyInputShell {
+  height: 42px;
+  padding: 4px 4px 4px 12px;
+  border-radius: 12px;
   border: 1px solid var(--border-default);
   background: var(--bg-base);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.keyInputShell:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.keyInputInner {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
   font-size: 13.5px;
 }
 
-.input:focus,
-.select:focus {
+.confirmKeyBtn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.guideFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.guideLink {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.guideLink:hover {
+  text-decoration: underline;
+}
+
+.modelChipGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modelChip {
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.modelChip:hover {
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.modelChipActive {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.accordionCard {
+  border-radius: 16px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.accordionTrigger {
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.accordionTitleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.accordionChevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.accordionBody {
+  padding: 4px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.input {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 11px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13.5px;
+  box-sizing: border-box;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.segmentedRow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+}
+
+.segmentedBtn {
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.segmentedBtnActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tierGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.tierBtn {
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tierBtn:hover {
+  border-color: var(--border-default);
+}
+
+.tierBtnActive {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tierTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tierBtnActive .tierTitle {
+  color: var(--accent);
+}
+
+.tierSub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.customInputRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.customInputRow .input {
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.switchFieldRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.switchFieldLabel {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.toggleSwitch {
+  width: 42px;
+  height: 24px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--bg-active);
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background-color 0.18s;
+}
+
+.toggleSwitchOn {
+  background: var(--accent);
+}
+
+.toggleThumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.18s;
+}
+
+.toggleSwitchOn .toggleThumb {
+  transform: translateX(18px);
 }
 
 .row {
@@ -112,16 +567,18 @@
 }
 
 .btn {
-  height: 34px;
-  padding: 0 13px;
-  border-radius: var(--radius-sm);
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
   border: 1px solid var(--border-default);
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-size: 13px;
+  font-weight: 500;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  cursor: pointer;
 }
 
 .btn:hover {
@@ -129,39 +586,131 @@
 }
 
 .btnPrimary {
-  background: var(--text-primary);
-  border-color: var(--text-primary);
-  color: var(--bg-base);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast, #fff);
 }
 
 .btnPrimary:hover {
-  opacity: 0.9;
-  background: var(--text-primary);
+  opacity: 0.92;
+  background: var(--accent);
 }
 
 .btnDanger {
   border-color: var(--danger);
   color: var(--danger);
+  background: transparent;
 }
 
 .btnDanger:hover {
   background: var(--danger-soft);
 }
 
-.card {
-  padding: 14px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-subtle);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .hint {
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--text-muted);
   line-height: 1.5;
+}
+
+.iconDeleteBtn {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent);
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.iconDeleteBtn:hover {
+  background: var(--danger-soft);
+}
+
+.updateHighlight {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  background: var(--accent-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.updateHighlightBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.pillMenuOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2600;
+  background: transparent;
+}
+
+.pillMenuCard {
+  position: fixed;
+  min-width: 184px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pillMenuTitle {
+  padding: 6px 10px 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pillMenuItem {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.pillMenuItem:hover {
+  background: var(--bg-hover);
+}
+
+.pillMenuDanger {
+  color: var(--danger);
+}
+
+.pillMenuDanger:hover {
+  background: var(--danger-soft);
 }
 
 @media (max-width: 767px) {
@@ -174,12 +723,26 @@
   .nav {
     width: 100%;
     flex-direction: row;
+    padding: 8px 10px;
+    gap: 4px;
     border-right: none;
     border-bottom: 1px solid var(--border-subtle);
   }
 
   .navBtn {
     flex: 1;
-    text-align: center;
+    height: 34px;
+    padding: 0 6px;
+    font-size: 12.5px;
+    justify-content: center;
+    white-space: nowrap;
+  }
+
+  .content {
+    padding: 14px 14px 20px;
+  }
+
+  .presetGrid {
+    grid-template-columns: 1fr;
   }
 }

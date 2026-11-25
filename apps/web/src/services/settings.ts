@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ContextCompressionMode } from '@tavern-chat/core'
+import type { ContextCompressionMode, TavernSyncSettings } from '@tavern-chat/core'
 
 export type ProviderFormat = 'openai' | 'anthropic' | 'ollama'
 export type ThemeMode = 'system' | 'light' | 'dark'
@@ -12,6 +12,7 @@ export type ProviderConfig = {
   apiKey: string
   model: string
   models: string[]
+  isRelay?: boolean
 }
 
 export type ProviderPresetTemplate = {
@@ -22,6 +23,7 @@ export type ProviderPresetTemplate = {
   defaultModel: string
   models: string[]
   hint: string
+  isRelay?: boolean
 }
 
 export const PROVIDER_TEMPLATES: ProviderPresetTemplate[] = [
@@ -35,13 +37,24 @@ export const PROVIDER_TEMPLATES: ProviderPresetTemplate[] = [
     hint: '官方 V4：Flash 快、Pro 强，1M 上下文',
   },
   {
+    key: 'relay',
+    name: '第三方中转站（OneAPI / NewAPI）',
+    format: 'openai',
+    baseUrl: '',
+    defaultModel: 'deepseek-chat',
+    models: ['deepseek-chat', 'gpt-4o', 'claude-sonnet-4-5', 'gemini-2.5-pro'],
+    hint: '填写中转站网址（如 https://xxx.com/v1）与 Key 即可拉取模型',
+    isRelay: true,
+  },
+  {
     key: 'openai',
-    name: 'OpenAI / 兼容中转',
+    name: 'OpenAI / 兼容接口',
     format: 'openai',
     baseUrl: 'https://api.openai.com/v1',
     defaultModel: 'gpt-4o',
     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1'],
-    hint: '支持所有 OpenAI 协议中转站',
+    hint: '支持 OpenAI 官方或兼容中转接口',
+    isRelay: true,
   },
   {
     key: 'anthropic',
@@ -102,6 +115,14 @@ export type SettingsState = {
   autoInsertGreeting: boolean
   /** 可选自定义远端/局域网网关地址（如手机连接电脑桌面端网关） */
   customGatewayOrigin: string
+  /** GitHub Release 版本清单 latest.json 地址（留空可使用默认仓库发布配置或手动填写） */
+  updateManifestUrl: string
+  /** 国内镜像站 latest.json 地址，或 GitHub 加速前缀（如 https://cdn.example.com/） */
+  updateMirrorUrl: string
+  /** 已忽略提示的版本号 */
+  dismissedUpdateVersion: string
+  /** 设置最近修改时间，用于多设备双向同步判断先后 */
+  settingsUpdatedAt: number
 }
 
 const STORAGE_KEY = 'tavernchat.settings.v1'
@@ -152,6 +173,14 @@ function loadSettings(): SettingsState {
     contextCompression: 'balanced',
     autoInsertGreeting: true,
     customGatewayOrigin: '',
+    updateManifestUrl:
+      typeof __DEFAULT_UPDATE_MANIFEST_URL__ !== 'undefined'
+        ? __DEFAULT_UPDATE_MANIFEST_URL__
+        : '',
+    updateMirrorUrl:
+      typeof __DEFAULT_UPDATE_MIRROR_URL__ !== 'undefined' ? __DEFAULT_UPDATE_MIRROR_URL__ : '',
+    dismissedUpdateVersion: '',
+    settingsUpdatedAt: 0,
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -212,9 +241,13 @@ type SettingsActions = {
         | 'contextCompression'
         | 'autoInsertGreeting'
         | 'customGatewayOrigin'
+        | 'updateManifestUrl'
+        | 'updateMirrorUrl'
+        | 'dismissedUpdateVersion'
       >
     >
   ) => void
+  applySyncedSettings: (remote: TavernSyncSettings) => boolean
 }
 
 export const useSettings = create<SettingsState & SettingsActions>((set, get) => ({
@@ -232,7 +265,7 @@ export const useSettings = create<SettingsState & SettingsActions>((set, get) =>
   },
 
   setActiveProvider: (activeProviderId) => {
-    set({ activeProviderId })
+    set({ activeProviderId, settingsUpdatedAt: Date.now() })
     saveSettings(extractData(get()))
   },
 
@@ -242,7 +275,7 @@ export const useSettings = create<SettingsState & SettingsActions>((set, get) =>
     const providers = exists
       ? prev.map((p) => (p.id === provider.id ? provider : p))
       : [...prev, provider]
-    set({ providers, activeProviderId: provider.id })
+    set({ providers, activeProviderId: provider.id, settingsUpdatedAt: Date.now() })
     saveSettings(extractData(get()))
   },
 
@@ -251,13 +284,44 @@ export const useSettings = create<SettingsState & SettingsActions>((set, get) =>
     if (remaining.length === 0) return
     const activeProviderId =
       get().activeProviderId === id ? remaining[0]!.id : get().activeProviderId
-    set({ providers: remaining, activeProviderId })
+    set({ providers: remaining, activeProviderId, settingsUpdatedAt: Date.now() })
     saveSettings(extractData(get()))
   },
 
   updateGeneral: (patch) => {
-    set(patch)
+    const touchesSyncedPref =
+      patch.defaultMaxContextTokens !== undefined ||
+      patch.defaultMaxResponseTokens !== undefined ||
+      patch.contextCompression !== undefined ||
+      patch.autoInsertGreeting !== undefined
+    set({
+      ...patch,
+      ...(touchesSyncedPref ? { settingsUpdatedAt: Date.now() } : {}),
+    })
     saveSettings(extractData(get()))
+  },
+
+  applySyncedSettings: (remote) => {
+    const localUpdatedAt = get().settingsUpdatedAt
+    if (!remote || remote.updatedAt <= localUpdatedAt) return false
+    const providers =
+      Array.isArray(remote.providers) && remote.providers.length > 0
+        ? (remote.providers as ProviderConfig[]).map(migrateProvider)
+        : get().providers
+    const activeProviderId = providers.some((p) => p.id === remote.activeProviderId)
+      ? remote.activeProviderId
+      : providers[0]!.id
+    set({
+      providers,
+      activeProviderId,
+      defaultMaxContextTokens: remote.defaultMaxContextTokens,
+      defaultMaxResponseTokens: remote.defaultMaxResponseTokens,
+      contextCompression: remote.contextCompression,
+      autoInsertGreeting: remote.autoInsertGreeting,
+      settingsUpdatedAt: remote.updatedAt,
+    })
+    saveSettings(extractData(get()))
+    return true
   },
 }))
 
@@ -272,6 +336,22 @@ function extractData(s: SettingsState & SettingsActions): SettingsState {
     contextCompression: s.contextCompression,
     autoInsertGreeting: s.autoInsertGreeting,
     customGatewayOrigin: s.customGatewayOrigin,
+    updateManifestUrl: s.updateManifestUrl,
+    updateMirrorUrl: s.updateMirrorUrl,
+    dismissedUpdateVersion: s.dismissedUpdateVersion,
+    settingsUpdatedAt: s.settingsUpdatedAt,
+  }
+}
+
+export function toSyncSettingsSnapshot(state: SettingsState): TavernSyncSettings {
+  return {
+    providers: state.providers,
+    activeProviderId: state.activeProviderId,
+    defaultMaxContextTokens: state.defaultMaxContextTokens,
+    defaultMaxResponseTokens: state.defaultMaxResponseTokens,
+    contextCompression: state.contextCompression,
+    autoInsertGreeting: state.autoInsertGreeting,
+    updatedAt: state.settingsUpdatedAt,
   }
 }
 

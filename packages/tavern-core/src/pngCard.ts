@@ -2,9 +2,10 @@
  * 纯二进制 PNG Character Card V2 / V3 读写器（零外部依赖，浏览器 / Android / Node 全端通用）
  *
  * 兼容 SillyTavern 规范：
- * - 读取时优先解析 tEXt chunk 中的 `ccv3`（V3），若不存在则回退 `chara`（V2/V1）。
+ * - 读取时优先解析 tEXt / iTXt / zTXt chunk 中的 `ccv3`（V3），若不存在则回退 `chara`（V2/V1）。
  * - 写入时同时写入 `chara`（V2）与 `ccv3`（V3），与 SillyTavern 官方行为保持一致。
  */
+import { inflateZlib } from './inflate.ts'
 
 const PNG_SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
 
@@ -75,7 +76,7 @@ function utf8ToBase64(text: string): string {
 }
 
 function base64ToUtf8(b64: string): string {
-  const cleaned = b64.replace(/\s+/g, '')
+  const cleaned = b64.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/')
   if (typeof Buffer !== 'undefined') {
     return Buffer.from(cleaned, 'base64').toString('utf8')
   }
@@ -85,6 +86,14 @@ function base64ToUtf8(b64: string): string {
     bytes[i] = binary.charCodeAt(i)
   }
   return new TextDecoder('utf-8').decode(bytes)
+}
+
+function decodeCardTextPayload(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return trimmed
+  }
+  return base64ToUtf8(trimmed)
 }
 
 export function bytesToDataUrl(bytes: Uint8Array, mime = 'image/png'): string {
@@ -179,8 +188,45 @@ function decodeTextChunk(data: Uint8Array): { keyword: string; text: string } | 
   const nulIndex = data.indexOf(0)
   if (nulIndex < 0) return null
   const keyword = bytesToAscii(data.subarray(0, nulIndex))
-  const text = bytesToAscii(data.subarray(nulIndex + 1))
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(data.subarray(nulIndex + 1))
   return { keyword, text }
+}
+
+function decodeZTxtChunk(data: Uint8Array): { keyword: string; text: string } | null {
+  const nulIndex = data.indexOf(0)
+  if (nulIndex < 0 || nulIndex + 2 > data.length) return null
+  const keyword = bytesToAscii(data.subarray(0, nulIndex))
+  const compressionMethod = data[nulIndex + 1]
+  if (compressionMethod !== 0) return null
+  try {
+    const raw = inflateZlib(data.subarray(nulIndex + 2))
+    return { keyword, text: new TextDecoder('utf-8').decode(raw) }
+  } catch {
+    return null
+  }
+}
+
+function decodeITXtChunk(data: Uint8Array): { keyword: string; text: string } | null {
+  const kEnd = data.indexOf(0)
+  if (kEnd < 0 || kEnd + 3 > data.length) return null
+  const keyword = bytesToAscii(data.subarray(0, kEnd))
+  const compFlag = data[kEnd + 1]
+  const compMethod = data[kEnd + 2]
+  const langEnd = data.indexOf(0, kEnd + 3)
+  if (langEnd < 0) return null
+  const transEnd = data.indexOf(0, langEnd + 1)
+  if (transEnd < 0) return null
+  const textBytes = data.subarray(transEnd + 1)
+  if (compFlag === 1) {
+    if (compMethod !== 0) return null
+    try {
+      const raw = inflateZlib(textBytes)
+      return { keyword, text: new TextDecoder('utf-8').decode(raw) }
+    } catch {
+      return null
+    }
+  }
+  return { keyword, text: new TextDecoder('utf-8').decode(textBytes) }
 }
 
 function encodeTextChunk(keyword: string, text: string): PngChunk {
@@ -194,7 +240,7 @@ function encodeTextChunk(keyword: string, text: string): PngChunk {
 }
 
 /**
- * 从 PNG 字节流中读取酒馆角色卡 JSON 字符串（优先 ccv3，其次 chara）
+ * 从 PNG 字节流中读取酒馆角色卡 JSON 字符串（优先 ccv3，其次 chara，支持 tEXt / iTXt / zTXt）
  */
 export function readCharacterJsonFromPng(pngBytes: Uint8Array): string {
   const chunks = extractPngChunks(pngBytes)
@@ -202,8 +248,14 @@ export function readCharacterJsonFromPng(pngBytes: Uint8Array): string {
   let charaText: string | null = null
 
   for (const chunk of chunks) {
-    if (chunk.type !== 'tEXt') continue
-    const decoded = decodeTextChunk(chunk.data)
+    let decoded: { keyword: string; text: string } | null = null
+    if (chunk.type === 'tEXt') {
+      decoded = decodeTextChunk(chunk.data)
+    } else if (chunk.type === 'iTXt') {
+      decoded = decodeITXtChunk(chunk.data)
+    } else if (chunk.type === 'zTXt') {
+      decoded = decodeZTxtChunk(chunk.data)
+    }
     if (!decoded) continue
     const key = decoded.keyword.toLowerCase()
     if (key === 'ccv3') {
@@ -214,10 +266,10 @@ export function readCharacterJsonFromPng(pngBytes: Uint8Array): string {
   }
 
   if (ccv3Text) {
-    return base64ToUtf8(ccv3Text)
+    return decodeCardTextPayload(ccv3Text)
   }
   if (charaText) {
-    return base64ToUtf8(charaText)
+    return decodeCardTextPayload(charaText)
   }
   throw new Error('该 PNG 图片中未找到 SillyTavern 角色卡元数据（chara / ccv3）')
 }

@@ -3,22 +3,32 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { deflateRawSync, deflateSync } from 'node:zlib'
 import {
   applyRegexScripts,
   assemblePrompt,
   buildContextMemoryBlock,
   createBuiltinRulePresets,
+  createBuiltinStarterCharacters,
+  createDefaultSelfCharacter,
   createEmptyCharacter,
   createEmptyPersona,
   createEmptyWorld,
+  createMinimalPlaceholderPng,
   exportCharacterToSillyTavernPng,
   exportWorldToSillyTavernJson,
   extractCompactionSummary,
   findActiveCheckpoint,
   importSillyTavernCharacterPng,
   importSillyTavernWorldJson,
+  mergeSyncSnapshots,
+  normalizeChubCharacterPayload,
+  normalizeChubLorebookPayload,
+  normalizeChubPresetPayload,
   parseMarketManifest,
+  parseSyncSnapshot,
   planCompaction,
+  readCharacterJsonFromPng,
   resolveCompactionBudget,
   scanWorldInfo,
   smartImportFile,
@@ -571,4 +581,317 @@ test('market plugin manifests validate HTTPS resources and builtin allowlists st
       `${plugin.id} 路径前缀与目录地址不一致`
     )
   }
+  assert.ok(
+    BUILTIN_MARKET_PLUGINS.some((plugin) => plugin.id === 'chub-ai'),
+    'builtin market plugins should include chub-ai'
+  )
+
+  const chubChar = normalizeChubCharacterPayload({
+    node: {
+      name: 'Aria',
+      topics: ['Fantasy', 'SFW'],
+      definition: {
+        name: 'Aria',
+        description: 'Traveler from the north.',
+        first_message: 'Well met, {{user}}.',
+      },
+    },
+  })
+  const importedChar = smartImportFile('aria.json', JSON.stringify(chubChar))
+  assert.equal(importedChar.kind, 'character')
+  assert.equal(importedChar.bundle.character.name, 'Aria')
+
+  const chubLore = normalizeChubLorebookPayload({
+    node: {
+      name: 'Northern Realms',
+      definition: {
+        embedded_lorebook: {
+          name: 'Northern Realms',
+          entries: [
+            {
+              id: 1,
+              keys: ['Citadel'],
+              name: 'Glass Citadel',
+              content: 'Built atop frozen cliffs.',
+              constant: false,
+              enabled: true,
+            },
+          ],
+        },
+      },
+    },
+  })
+  const importedWorld = smartImportFile('northern.json', JSON.stringify(chubLore))
+  assert.equal(importedWorld.kind, 'world')
+  assert.equal(importedWorld.world.payload.entries[0]?.name, 'Glass Citadel')
+
+  const chubPreset = normalizeChubPresetPayload({
+    node: {
+      name: 'Storyteller Preset',
+      definition: {
+        definition: {
+          config: {
+            system_prompt: { value: 'Stay grounded in scene.' },
+            jailbreak_prompt: { value: 'Focus on vivid dialogue.' },
+            generation_settings: {
+              temperature: { value: 0.75 },
+              top_p: { value: 0.92 },
+              context_length: { value: 32768 },
+            },
+          },
+        },
+      },
+    },
+  })
+  const importedRule = smartImportFile('storyteller.json', JSON.stringify(chubPreset))
+  assert.equal(importedRule.kind, 'rule')
+  assert.equal(importedRule.rule.payload.temperature, 0.75)
+  assert.ok(importedRule.rule.payload.systemPrompt.includes('Stay grounded in scene.'))
+})
+
+test('mergeSyncSnapshots merges concurrent edits, tombstones, and settings cleanly', () => {
+  const charA = createEmptyCharacter('角色甲')
+  charA.updatedAt = 100
+  const charB = createEmptyCharacter('角色乙')
+  charB.updatedAt = 120
+  const deletedChar = createEmptyCharacter('待删除角色')
+  deletedChar.updatedAt = 90
+
+  const phone = parseSyncSnapshot({
+    schema: 1,
+    revision: 2,
+    updatedAt: 200,
+    components: [charA, deletedChar],
+    sessions: [
+      {
+        id: 'sess_1',
+        title: '群聊会话',
+        mounts: [],
+        authorsNote: '',
+        authorsNoteDepth: 4,
+        multiCharMode: 'narrator',
+        activeLeafId: 'm2',
+        createdAt: 100,
+        updatedAt: 200,
+      },
+    ],
+    messages: [
+      {
+        id: 'm1',
+        sessionId: 'sess_1',
+        parentId: null,
+        role: 'user',
+        content: '手机端消息',
+        createdAt: 150,
+        updatedAt: 150,
+      },
+    ],
+    deletedIds: {},
+    settings: {
+      providers: [{ id: 'p1', name: 'DeepSeek', apiKey: 'sk-phone' }],
+      activeProviderId: 'p1',
+      defaultMaxContextTokens: 32768,
+      defaultMaxResponseTokens: 2048,
+      contextCompression: 'balanced',
+      autoInsertGreeting: true,
+      updatedAt: 200,
+    },
+  })
+
+  const pc = parseSyncSnapshot({
+    schema: 1,
+    revision: 2,
+    updatedAt: 250,
+    components: [{ ...charA, name: '角色甲（电脑修改版）', updatedAt: 240 }, charB],
+    sessions: [
+      {
+        id: 'sess_1',
+        title: '群聊会话（同步）',
+        mounts: [],
+        authorsNote: '',
+        authorsNoteDepth: 4,
+        multiCharMode: 'narrator',
+        activeLeafId: 'm2',
+        createdAt: 100,
+        updatedAt: 250,
+      },
+    ],
+    messages: [
+      {
+        id: 'm2',
+        sessionId: 'sess_1',
+        parentId: 'm1',
+        role: 'assistant',
+        content: '电脑端回复',
+        createdAt: 250,
+        updatedAt: 250,
+      },
+    ],
+    deletedIds: { [deletedChar.id]: 220 },
+    settings: {
+      providers: [],
+      activeProviderId: '',
+      defaultMaxContextTokens: 32768,
+      defaultMaxResponseTokens: 2048,
+      contextCompression: 'balanced',
+      autoInsertGreeting: true,
+      updatedAt: 0,
+    },
+  })
+
+  const merged = mergeSyncSnapshots(phone, pc)
+  assert.equal(merged.components.length, 2)
+  assert.equal(
+    merged.components.find((c) => c.id === charA.id)?.name,
+    '角色甲（电脑修改版）'
+  )
+  assert.equal(merged.components.some((c) => c.id === deletedChar.id), false)
+  assert.equal(merged.messages.length, 2)
+  assert.equal(merged.sessions[0]?.title, '群聊会话（同步）')
+  assert.equal((merged.settings?.providers[0] as { apiKey?: string })?.apiKey, 'sk-phone')
+})
+
+function buildMinimalZip(files: Array<{ name: string; data: Uint8Array; compress?: boolean }>): Uint8Array {
+  const localParts: Buffer[] = []
+  const centralParts: Buffer[] = []
+  let offset = 0
+
+  for (const file of files) {
+    const nameBuf = Buffer.from(file.name, 'utf8')
+    const rawBuf = Buffer.from(file.data)
+    const compBuf = file.compress ? deflateRawSync(rawBuf) : rawBuf
+    const method = file.compress ? 8 : 0
+
+    const localHeader = Buffer.alloc(30)
+    localHeader.writeUInt32LE(0x04034b50, 0)
+    localHeader.writeUInt16LE(20, 4)
+    localHeader.writeUInt16LE(method, 8)
+    localHeader.writeUInt32LE(compBuf.length, 18)
+    localHeader.writeUInt32LE(rawBuf.length, 22)
+    localHeader.writeUInt16LE(nameBuf.length, 26)
+    localParts.push(localHeader, nameBuf, compBuf)
+
+    const cdHeader = Buffer.alloc(46)
+    cdHeader.writeUInt32LE(0x02014b50, 0)
+    cdHeader.writeUInt16LE(20, 4)
+    cdHeader.writeUInt16LE(20, 6)
+    cdHeader.writeUInt16LE(method, 10)
+    cdHeader.writeUInt32LE(compBuf.length, 20)
+    cdHeader.writeUInt32LE(rawBuf.length, 24)
+    cdHeader.writeUInt16LE(nameBuf.length, 28)
+    cdHeader.writeUInt32LE(offset, 42)
+    centralParts.push(cdHeader, nameBuf)
+
+    offset += localHeader.length + nameBuf.length + compBuf.length
+  }
+
+  const cdBuf = Buffer.concat(centralParts)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(files.length, 8)
+  eocd.writeUInt16LE(files.length, 10)
+  eocd.writeUInt32LE(cdBuf.length, 12)
+  eocd.writeUInt32LE(offset, 16)
+
+  return new Uint8Array(Buffer.concat([...localParts, cdBuf, eocd]))
+}
+
+function insertPngChunkBeforeIend(pngBytes: Uint8Array, type: string, data: Uint8Array): Uint8Array {
+  const iendPos = pngBytes.length - 12
+  const out = new Uint8Array(pngBytes.length + 12 + data.length)
+  out.set(pngBytes.subarray(0, iendPos), 0)
+  const view = new DataView(out.buffer, iendPos)
+  view.setUint32(0, data.length, false)
+  for (let i = 0; i < 4; i++) out[iendPos + 4 + i] = type.charCodeAt(i)
+  out.set(data, iendPos + 8)
+  out.set(pngBytes.subarray(iendPos), iendPos + 12 + data.length)
+  return out
+}
+
+test('Importers handle PNG iTXt/zTXt, CHARX zip, NovelAI lorebooks, BOM, prompt_order, and starter cards', () => {
+  const basePng = createMinimalPlaceholderPng()
+  const cardPayload = JSON.stringify({
+    spec: 'chara_card_v3',
+    spec_version: '3.0',
+    data: { name: '压缩块测试角色', first_mes: '你好，{{user}}。' },
+  })
+  const b64 = Buffer.from(cardPayload, 'utf8').toString('base64')
+
+  const itxtHeader = Buffer.from('ccv3\0\x01\x00\0\0', 'latin1')
+  const itxtData = new Uint8Array(Buffer.concat([itxtHeader, deflateSync(Buffer.from(b64, 'utf8'))]))
+  const pngWithItxt = insertPngChunkBeforeIend(basePng, 'iTXt', itxtData)
+  assert.equal(JSON.parse(readCharacterJsonFromPng(pngWithItxt)).data.name, '压缩块测试角色')
+
+  const ztxtHeader = Buffer.from('chara\0\x00', 'latin1')
+  const ztxtData = new Uint8Array(Buffer.concat([ztxtHeader, deflateSync(Buffer.from(b64, 'utf8'))]))
+  const pngWithZtxt = insertPngChunkBeforeIend(basePng, 'zTXt', ztxtData)
+  assert.equal(JSON.parse(readCharacterJsonFromPng(pngWithZtxt)).data.name, '压缩块测试角色')
+
+  const charxZip = buildMinimalZip([
+    {
+      name: 'card.json',
+      data: Buffer.from(
+        JSON.stringify({ spec: 'chara_card_v3', data: { name: 'Charx角色', first_mes: 'Hi' } }),
+        'utf8'
+      ),
+      compress: true,
+    },
+    { name: 'assets/icon/output/main.png', data: basePng, compress: false },
+  ])
+  const importedCharx = smartImportFile('hero.charx', charxZip)
+  assert.equal(importedCharx.kind, 'character')
+  assert.equal(importedCharx.bundle.character.name, 'Charx角色')
+  assert.ok(importedCharx.bundle.character.avatar?.startsWith('data:image/png;base64,'))
+
+  const bomWorld =
+    '\uFEFF' +
+    JSON.stringify({
+      lorebookVersion: 4,
+      entries: [
+        { displayName: '白银港', keys: '港口, 商船', text: '终年不冻的海港城市。', forceActivation: 'true' },
+      ],
+    })
+  const importedWorld = smartImportFile('silver.lorebook', bomWorld)
+  assert.equal(importedWorld.kind, 'world')
+  assert.equal(importedWorld.world.payload.entries[0]?.constant, true)
+  assert.deepEqual(importedWorld.world.payload.entries[0]?.keys, ['港口', '商船'])
+
+  const presetOrdered = smartImportFile(
+    'ordered.json',
+    JSON.stringify({
+      prompts: [
+        { identifier: 'main', content: '主系统指令' },
+        { identifier: 'disabled_block', content: '不应被拼接的禁用段' },
+        { identifier: 'jailbreak', content: '后置指令' },
+      ],
+      prompt_order: [
+        {
+          character_id: 100001,
+          order: [
+            { identifier: 'main', enabled: true },
+            { identifier: 'disabled_block', enabled: false },
+            { identifier: 'jailbreak', enabled: true },
+          ],
+        },
+      ],
+      temperature: 0.88,
+    })
+  )
+  assert.equal(presetOrdered.kind, 'rule')
+  assert.ok(!presetOrdered.rule.payload.systemPrompt.includes('不应被拼接'))
+  assert.equal(presetOrdered.rule.payload.postHistoryInstructions, '后置指令')
+
+  const pygV1 = smartImportFile(
+    'pyg.json',
+    JSON.stringify({ char_name: '古典角色', char_persona: '温和的学者', char_greeting: '你好。' })
+  )
+  assert.equal(pygV1.kind, 'character')
+  assert.equal(pygV1.bundle.character.name, '古典角色')
+
+  const selfCard = createDefaultSelfCharacter()
+  assert.equal(selfCard.name, '我')
+  assert.equal(selfCard.avatar, undefined)
+  const starters = createBuiltinStarterCharacters()
+  assert.ok(starters.some((c) => c.name === 'DeepSeek 子午老师' && c.avatar === 'avatars/ziwu.jpg'))
+  assert.ok(starters.some((c) => c.name === 'DeepSeek 鲸鱼娘' && c.avatar === 'avatars/jingyu.jpg'))
 })

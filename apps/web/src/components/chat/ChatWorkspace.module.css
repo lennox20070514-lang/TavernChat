@@ -169,6 +169,21 @@
   margin-top: 2px;
 }
 
+.msgAvatarBtn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-self: flex-start;
+  border-radius: 10px;
+}
+
+.msgAvatarBtn:hover .msgAvatar {
+  border-color: var(--accent);
+}
+
 .msgBody {
   flex: 1;
   min-width: 0;

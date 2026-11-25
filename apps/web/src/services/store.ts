@@ -1,6 +1,8 @@
 import {
   assemblePrompt,
+  BUILTIN_SELF_CHARACTER_ID,
   createBuiltinRulePresets,
+  createBuiltinStarterCharacters,
   findActiveCheckpoint,
   planCompaction,
   resolveCompactionBudget,
@@ -22,6 +24,13 @@ import { runCompaction } from './contextCompaction.ts'
 import { streamChatCompletion } from './llm/client.ts'
 import { getActiveProvider, useSettings } from './settings.ts'
 import { storage } from './storage/indexedDbAdapter.ts'
+import {
+  isApplyingRemoteSync,
+  readSyncDeletedIds,
+  recordSyncDeletion,
+  registerStoreSyncReload,
+  scheduleSyncPush,
+} from './sync.ts'
 
 function uid(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -122,20 +131,24 @@ type AppStoreState = {
   libraryOpen: boolean
   libraryInitialTab: ComponentKind | 'all'
   libraryEditingId: string | null
+  libraryCreatingKind: 'character' | 'world' | 'rule' | null
   mountDrawerOpen: boolean
   chatSearchOpen: boolean
   chatSearchQuery: string
   settingsOpen: boolean
+  lanConnectOpen: boolean
   promptPreviewOpen: boolean
   mobileSiderOpen: boolean
 
   init: () => Promise<void>
+  reloadFromStorage: () => Promise<void>
   showToast: (text: string, tone?: ToastMessage['tone']) => void
   clearToast: () => void
 
   // UI 控制
   setMarketOpen: (open: boolean) => void
   openLibrary: (tab?: ComponentKind | 'all', editId?: string | null) => void
+  openLibraryCreate: (kind?: 'character' | 'world' | 'rule') => void
   closeLibrary: () => void
   setMountDrawerOpen: (open: boolean) => void
   setChatSearchOpen: (open: boolean) => void
@@ -143,6 +156,7 @@ type AppStoreState = {
   openSessionWithSearch: (sessionId: string, query: string) => Promise<void>
   loadAllMessagesForSearch: () => Promise<void>
   setSettingsOpen: (open: boolean) => void
+  setLanConnectOpen: (open: boolean) => void
   setPromptPreviewOpen: (open: boolean) => void
   setMobileSiderOpen: (open: boolean) => void
 
@@ -200,10 +214,12 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   libraryOpen: false,
   libraryInitialTab: 'all',
   libraryEditingId: null,
+  libraryCreatingKind: null,
   mountDrawerOpen: false,
   chatSearchOpen: false,
   chatSearchQuery: '',
   settingsOpen: false,
+  lanConnectOpen: false,
   promptPreviewOpen: false,
   mobileSiderOpen: false,
 
@@ -219,8 +235,21 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   setMarketOpen: (marketOpen) => set({ marketOpen }),
   openLibrary: (tab = 'all', editId = null) =>
-    set({ libraryOpen: true, libraryInitialTab: tab, libraryEditingId: editId }),
-  closeLibrary: () => set({ libraryOpen: false, libraryEditingId: null }),
+    set({
+      libraryOpen: true,
+      libraryInitialTab: tab,
+      libraryEditingId: editId,
+      libraryCreatingKind: null,
+    }),
+  openLibraryCreate: (kind = 'character') =>
+    set({
+      libraryOpen: true,
+      libraryInitialTab: kind,
+      libraryEditingId: null,
+      libraryCreatingKind: kind,
+    }),
+  closeLibrary: () =>
+    set({ libraryOpen: false, libraryEditingId: null, libraryCreatingKind: null }),
   setMountDrawerOpen: (mountDrawerOpen) => set({ mountDrawerOpen }),
   setChatSearchOpen: (chatSearchOpen) =>
     set((s) => ({ chatSearchOpen, chatSearchQuery: chatSearchOpen ? s.chatSearchQuery : '' })),
@@ -252,12 +281,15 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     })
   },
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  setLanConnectOpen: (lanConnectOpen) => set({ lanConnectOpen }),
   setPromptPreviewOpen: (promptPreviewOpen) => set({ promptPreviewOpen }),
   setMobileSiderOpen: (mobileSiderOpen) => set({ mobileSiderOpen }),
 
   init: async () => {
     let components = await storage.listComponents()
-    // 首次启动只注入 2 条干净通用的基础规则卡，绝不塞演示角色或演示世界书
+    const deletedIds = readSyncDeletedIds()
+
+    // 首次启动注入极简基础规则
     if (components.length === 0) {
       const defaults = createBuiltinRulePresets()
       for (const item of defaults) {
@@ -265,6 +297,38 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       }
       components = defaults
     }
+
+    // 注入默认空白「我」视角与 DeepSeek 子午老师 / 鲸鱼娘上手预设角色（尊重用户手动删除记录）
+    let addedSelfChar = false
+    const starterList = createBuiltinStarterCharacters()
+    const starterMap = new Map(starterList.map((s) => [s.id, s]))
+    const LEGACY_GENERATED_AVATARS = new Set([
+      'avatars/ziwu-1.jpg',
+      'avatars/ziwu-2.jpg',
+      'avatars/jingyu-1.jpg',
+      'avatars/jingyu-2.jpg',
+    ])
+    for (let i = 0; i < components.length; i += 1) {
+      const c = components[i]!
+      const starter = starterMap.get(c.id)
+      if (starter && c.avatar && LEGACY_GENERATED_AVATARS.has(c.avatar)) {
+        const migrated = { ...c, avatar: starter.avatar }
+        await storage.upsertComponent(migrated)
+        components[i] = migrated
+      }
+    }
+    const existingIds = new Set(components.map((c) => c.id))
+    for (const starter of starterList) {
+      if (!existingIds.has(starter.id) && !deletedIds[starter.id]) {
+        await storage.upsertComponent(starter)
+        components = [starter, ...components]
+        if (starter.id === BUILTIN_SELF_CHARACTER_ID) addedSelfChar = true
+      }
+    }
+
+    const defaultSelfId =
+      components.find((c) => c.id === BUILTIN_SELF_CHARACTER_ID)?.id ??
+      components.find((c) => c.kind === 'character' && c.name === '我')?.id
 
     let sessions = await storage.listSessions()
     let activeSessionId: string | null = sessions[0]?.id ?? null
@@ -274,6 +338,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         id: uid('sess'),
         title: '新对话',
         mounts: [],
+        userCharacterId: defaultSelfId,
         authorsNote: '',
         authorsNoteDepth: 4,
         multiCharMode: 'narrator',
@@ -284,6 +349,14 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       await storage.upsertSession(firstSession)
       sessions = [firstSession]
       activeSessionId = firstSession.id
+    } else if (addedSelfChar && defaultSelfId && sessions.length === 1 && !sessions[0]!.userCharacterId) {
+      const upgraded: ChatSession = {
+        ...sessions[0]!,
+        userCharacterId: defaultSelfId,
+        updatedAt: Date.now(),
+      }
+      await storage.upsertSession(upgraded)
+      sessions = [upgraded]
     }
 
     const messagesBySession: Record<string, ChatMessage[]> = {}
@@ -293,6 +366,37 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
     set({
       ready: true,
+      components,
+      sessions,
+      activeSessionId,
+      messagesBySession,
+    })
+  },
+
+  reloadFromStorage: async () => {
+    const prev = get()
+    const [components, sessions] = await Promise.all([
+      storage.listComponents(),
+      storage.listSessions(),
+    ])
+    const activeSessionId =
+      prev.activeSessionId && sessions.some((s) => s.id === prev.activeSessionId)
+        ? prev.activeSessionId
+        : (sessions[0]?.id ?? null)
+
+    const sessionIdsToLoad = new Set<string>(Object.keys(prev.messagesBySession))
+    if (activeSessionId) sessionIdsToLoad.add(activeSessionId)
+    const validIds = new Set(sessions.map((s) => s.id))
+    const entries = await Promise.all(
+      [...sessionIdsToLoad]
+        .filter((id) => validIds.has(id))
+        .map(async (id) => [id, await storage.listMessages(id)] as const)
+    )
+    const messagesBySession: Record<string, ChatMessage[]> = {}
+    for (const [id, msgs] of entries) {
+      messagesBySession[id] = msgs
+    }
+    set({
       components,
       sessions,
       activeSessionId,
@@ -314,6 +418,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   deleteComponent: async (id) => {
     await storage.deleteComponent(id)
+    recordSyncDeletion(id)
     // 同步从所有会话的挂载与出发视角中清理
     const nextSessions: ChatSession[] = []
     for (const s of get().sessions) {
@@ -339,10 +444,15 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   createSession: async (initialMounts = [], title = '新对话') => {
     const now = Date.now()
+    const components = get().components
+    const defaultSelfId =
+      components.find((c) => c.id === BUILTIN_SELF_CHARACTER_ID)?.id ??
+      components.find((c) => c.kind === 'character' && c.name === '我')?.id
     const session: ChatSession = {
       id: uid('sess'),
       title,
       mounts: initialMounts,
+      userCharacterId: defaultSelfId,
       authorsNote: '',
       authorsNoteDepth: 4,
       multiCharMode: 'narrator',
@@ -403,7 +513,9 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   deleteSession: async (id) => {
     get().stopStreaming(id)
+    const msgIds = (get().messagesBySession[id] ?? []).map((m) => m.id)
     await storage.deleteSession(id)
+    recordSyncDeletion([id, ...msgIds])
     const remaining = get().sessions.filter((s) => s.id !== id)
     const nextMessages = { ...get().messagesBySession }
     delete nextMessages[id]
@@ -730,11 +842,16 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const now = Date.now()
 
     if (trimmed) {
+      const povComp = session.userCharacterId
+        ? state.components.find((c) => c.id === session.userCharacterId)
+        : undefined
       const userMsg: ChatMessage = {
         id: uid('msg'),
         sessionId: session.id,
         parentId,
         role: 'user',
+        speakerName: povComp?.name,
+        speakerAvatar: povComp?.avatar,
         content: trimmed,
         createdAt: now,
         updatedAt: now,
@@ -842,6 +959,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     }
 
     await storage.deleteMessages(session.id, [...toDelete])
+    recordSyncDeletion([...toDelete])
     const remaining = allMsgs.filter((m) => !toDelete.has(m.id))
     const nextLeaf =
       session.activeLeafId && toDelete.has(session.activeLeafId)
@@ -1225,3 +1343,25 @@ async function generateAssistantReply(
     })
   }
 }
+
+registerStoreSyncReload(() => useAppStore.getState().reloadFromStorage())
+
+useAppStore.subscribe((state, prev) => {
+  if (!state.ready || !prev.ready || isApplyingRemoteSync()) return
+  if (Object.keys(state.streamingBySession).length > 0) return
+  if (
+    state.components !== prev.components ||
+    state.sessions !== prev.sessions ||
+    state.messagesBySession !== prev.messagesBySession ||
+    state.streamingBySession !== prev.streamingBySession
+  ) {
+    scheduleSyncPush()
+  }
+})
+
+useSettings.subscribe((state, prev) => {
+  if (isApplyingRemoteSync()) return
+  if (state.settingsUpdatedAt !== prev.settingsUpdatedAt) {
+    scheduleSyncPush()
+  }
+})

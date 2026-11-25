@@ -1,0 +1,149 @@
+name: Release Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（例如 0.1.1，留空则读取 package.json）'
+        required: false
+        type: string
+      version_code:
+        description: '安卓递增版本号 versionCode（例如 2）'
+        required: false
+        type: string
+      changelog:
+        description: '本次更新说明（显示在客户端升级弹窗中）'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack & install dependencies
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+
+      - name: Resolve version metadata
+        id: meta
+        shell: bash
+        run: |
+          PKG_VER=$(node -e "console.log(require('./package.json').version)")
+          INPUT_VER="${{ github.event.inputs.version }}"
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            RAW_VER="${TAG_NAME#v}"
+            REL_TAG="$TAG_NAME"
+          elif [[ -n "$INPUT_VER" ]]; then
+            RAW_VER="${INPUT_VER#v}"
+            REL_TAG="v${RAW_VER}"
+          else
+            RAW_VER="${PKG_VER#v}"
+            REL_TAG="v${RAW_VER}"
+          fi
+          VCODE="${{ github.event.inputs.version_code }}"
+          if [[ -z "$VCODE" ]]; then
+            VCODE="${{ github.run_number }}"
+          fi
+          APK_NAME="TavernChat-v${RAW_VER}-android.apk"
+          echo "version=${RAW_VER}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${VCODE}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${REL_TAG}" >> "$GITHUB_OUTPUT"
+          echo "apk_name=${APK_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Run core tests & typecheck
+        run: |
+          corepack pnpm test
+          corepack pnpm type
+
+      - name: Build web bundle & sync Capacitor Android
+        env:
+          TAVERN_VERSION_NAME: ${{ steps.meta.outputs.version }}
+          TAVERN_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          TAVERN_UPDATE_MIRROR_URL: ${{ vars.TAVERN_UPDATE_MIRROR_URL }}
+        run: corepack pnpm apk:sync
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Decode Android Release Keystore (if configured)
+        id: sign
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/tavern-release.jks"
+          echo "has_keystore=true" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble Android APK
+        working-directory: apps/web/android
+        env:
+          TAVERN_VERSION_NAME: ${{ steps.meta.outputs.version }}
+          TAVERN_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          TAVERN_KEYSTORE_PATH: ${{ steps.sign.outputs.has_keystore == 'true' && format('{0}/tavern-release.jks', runner.temp) || '' }}
+          TAVERN_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TAVERN_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          TAVERN_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          if [[ -n "$TAVERN_KEYSTORE_PATH" ]]; then
+            ./gradlew assembleRelease --no-daemon
+          else
+            ./gradlew assembleDebug --no-daemon
+          fi
+
+      - name: Package APK & generate latest.json
+        env:
+          TAVERN_VERSION_NAME: ${{ steps.meta.outputs.version }}
+          TAVERN_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          APK_FILE_NAME: ${{ steps.meta.outputs.apk_name }}
+          TAVERN_UPDATE_MIRROR_PREFIX: ${{ vars.TAVERN_UPDATE_MIRROR_PREFIX }}
+          RELEASE_CHANGELOG: ${{ github.event.inputs.changelog }}
+          OUT_MANIFEST_PATH: release-out/latest.json
+        run: |
+          mkdir -p release-out
+          if [[ -f apps/web/android/app/build/outputs/apk/release/app-release.apk ]]; then
+            cp apps/web/android/app/build/outputs/apk/release/app-release.apk "release-out/${{ steps.meta.outputs.apk_name }}"
+          else
+            cp apps/web/android/app/build/outputs/apk/debug/app-debug.apk "release-out/${{ steps.meta.outputs.apk_name }}"
+          fi
+          node scripts/generate-update-manifest.mjs
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          name: TavernChat v${{ steps.meta.outputs.version }}
+          generate_release_notes: true
+          files: |
+            release-out/${{ steps.meta.outputs.apk_name }}
+            release-out/latest.json
+
+      - name: Trigger optional mirror sync webhook
+        if: ${{ vars.MIRROR_SYNC_WEBHOOK != '' }}
+        run: |
+          curl -fsS -X POST "${{ vars.MIRROR_SYNC_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d @release-out/latest.json

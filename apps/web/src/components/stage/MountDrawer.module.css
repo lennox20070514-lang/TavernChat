@@ -1,11 +1,37 @@
 .panel {
-  width: 348px;
+  width: 0;
   height: 100%;
-  border-left: 1px solid var(--border-subtle);
+  border-left: 1px solid transparent;
   background: var(--bg-subtle);
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  flex-shrink: 0;
+  transition:
+    width 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.2s ease,
+    border-color 0.22s ease,
+    visibility 0s linear 0.28s;
+}
+
+.panelOpen {
+  width: 348px;
+  border-left-color: var(--border-subtle);
+  opacity: 1;
+  visibility: visible;
+  transition:
+    width 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.2s ease,
+    border-color 0.22s ease,
+    visibility 0s;
+}
+
+.panelInner {
+  width: 348px;
+  min-width: 348px;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
 }
 
 .mobileBackdrop {
@@ -16,6 +42,21 @@
   backdrop-filter: blur(2px);
   display: flex;
   justify-content: flex-end;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.24s ease,
+    visibility 0s linear 0.3s;
+}
+
+.mobileBackdropOpen {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    opacity 0.24s ease,
+    visibility 0s;
 }
 
 .mobileSheet {
@@ -27,6 +68,13 @@
   flex-direction: column;
   box-shadow: var(--shadow-lg);
   padding: var(--sat) var(--sar) var(--sab) 0;
+  transform: translateX(102%);
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.mobileSheetOpen {
+  transform: translateX(0);
 }
 
 .header {
@@ -64,15 +112,16 @@
 }
 
 .iconBtn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-sm);
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .iconBtn:hover {
@@ -80,13 +129,60 @@
   color: var(--text-primary);
 }
 
+.iconBtnActive {
+  background: var(--accent-soft);
+  border-color: var(--kind-char-border);
+  color: var(--accent);
+}
+
 .controls {
-  padding: 10px 12px 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.tabsBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--bg-hover);
+}
+
+.tab {
+  flex: 1;
+  height: 28px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0 6px;
+  white-space: nowrap;
+  transition: background 0.14s, color 0.14s;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+.tabActive {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
 }
 
 .searchWrap {
@@ -137,38 +233,8 @@
   color: var(--text-primary);
 }
 
-.tabs {
-  display: flex;
-  gap: 4px;
-}
-
-.tab {
-  flex: 1;
-  height: 28px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-  padding: 0 4px;
-  white-space: nowrap;
-}
-
-.tab:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.tabActive {
-  background: var(--bg-elevated);
-  border-color: var(--border-default);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
-}
-
 .povBox {
-  padding: 10px 12px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
@@ -178,7 +244,7 @@
 
 .povText {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
@@ -190,29 +256,166 @@
 }
 
 .povHint {
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--text-tertiary);
   text-align: right;
 }
 
-.povSelect {
+.povAvatarActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.povAvatarAction {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.povAvatarAction:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.povAvatarReset {
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.povAvatarReset:hover {
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+}
+
+.povDropdownWrap {
+  position: relative;
+}
+
+.povTrigger {
   width: 100%;
-  height: 30px;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
   border: 1px solid var(--border-default);
   background: var(--bg-base);
   color: var(--text-primary);
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.povSelect:focus {
-  outline: none;
+.povTrigger:hover {
   border-color: var(--accent);
 }
 
+.povTriggerLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.povMiniAvatar,
+.povMiniAvatarFallback {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+
+.povMiniAvatar {
+  object-fit: cover;
+}
+
+.povMiniAvatarFallback {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.povTriggerName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.povMenu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  max-height: 230px;
+  overflow-y: auto;
+  padding: 5px;
+  border-radius: 12px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.povMenuItem {
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.povMenuItem:hover {
+  background: var(--bg-hover);
+}
+
+.povMenuItemActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.povMenuDivider {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--border-subtle);
+}
+
 .povActive {
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.45;
   color: var(--accent);
 }
@@ -237,42 +440,24 @@
   padding: 10px 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.groupHeader {
+.sectionTop {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 2px 2px;
+  gap: 8px;
+  padding: 0 2px;
 }
 
-.groupToggle {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  background: transparent;
-  padding: 2px 4px;
-  border-radius: 6px;
+.sectionInfo {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
-  text-align: left;
-}
-
-.groupToggle:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  color: var(--text-secondary);
 }
 
 .dot {
@@ -290,10 +475,6 @@
   background: var(--kind-world);
 }
 
-.dotPersona {
-  background: var(--kind-persona);
-}
-
 .dotRule {
   background: var(--kind-rule);
 }
@@ -304,12 +485,12 @@
 }
 
 .groupAddBtn {
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-secondary);
+  height: 25px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
   font-size: 11.5px;
   display: inline-flex;
   align-items: center;
@@ -318,18 +499,17 @@
 
 .groupAddBtn:hover {
   background: var(--bg-hover);
-  color: var(--text-primary);
-  border-color: var(--border-default);
+  border-color: var(--border-strong);
 }
 
 .groupList {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 
 .groupEmpty {
-  padding: 10px 12px;
+  padding: 14px 12px;
   border-radius: var(--radius-sm);
   border: 1px dashed var(--border-default);
   color: var(--text-tertiary);
@@ -366,19 +546,14 @@
   background: var(--kind-world-bg);
 }
 
-.cardMountedPersona {
-  border-color: var(--kind-persona-border);
-  background: var(--kind-persona-bg);
+.cardMountedRule {
+  border-color: var(--kind-rule-border);
+  background: var(--kind-rule-bg);
 }
 
 .cardPov {
   border-color: var(--accent);
   background: var(--accent-soft);
-}
-
-.cardMountedRule {
-  border-color: var(--kind-rule-border);
-  background: var(--kind-rule-bg);
 }
 
 .cardPaused {
@@ -392,8 +567,8 @@
 }
 
 .avatar {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 8px;
   object-fit: cover;
   background: var(--bg-hover);
@@ -430,13 +605,13 @@
 .cardOps {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   flex-shrink: 0;
 }
 
 .opIcon {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
   border: none;
   background: transparent;
@@ -452,8 +627,8 @@
 }
 
 .addChip {
-  height: 24px;
-  padding: 0 8px;
+  height: 25px;
+  padding: 0 9px;
   border-radius: 999px;
   border: 1px solid var(--border-default);
   background: var(--bg-base);
@@ -472,8 +647,8 @@
 }
 
 .removeChip {
-  height: 24px;
-  padding: 0 7px;
+  height: 25px;
+  padding: 0 8px;
   border-radius: 999px;
   border: 1px solid transparent;
   background: rgba(128, 128, 128, 0.12);
@@ -497,6 +672,27 @@
   gap: 5px;
 }
 
+.groupToggle {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.groupToggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .entryRow {
   display: flex;
   align-items: center;
@@ -516,7 +712,7 @@
 }
 
 .smallBtn {
-  height: 25px;
+  height: 26px;
   padding: 0 9px;
   border-radius: 6px;
   border: 1px solid var(--border-default);
@@ -535,6 +731,7 @@
 .noteBox {
   border-top: 1px solid var(--border-subtle);
   padding-top: 10px;
+  margin-top: 2px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -573,7 +770,7 @@
 
 .modeBtn {
   flex: 1;
-  height: 27px;
+  height: 28px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-default);
   background: var(--bg-base);
@@ -599,7 +796,7 @@
 
 .footerBtn {
   flex: 1;
-  height: 32px;
+  height: 34px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-default);
   background: var(--bg-subtle);

@@ -207,3 +207,25 @@ export const IconMenu = ({ size = 18, ...p }: IconProps) => (
     <path d="M4 6h16M4 12h16M4 18h16" />
   </svg>
 )
+
+export const IconArrowLeft = ({ size = 16, ...p }: IconProps) => (
+  <svg {...base(size)} {...p}>
+    <path d="M19 12H5M12 19l-7-7 7-7" />
+  </svg>
+)
+
+export const IconHelpCircle = ({ size = 14, ...p }: IconProps) => (
+  <svg {...base(size)} {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9.5 9a2.5 2.5 0 0 1 4.8.8c0 1.6-2.3 2.1-2.3 3.4" />
+    <circle cx="12" cy="17" r="0.6" fill="currentColor" />
+  </svg>
+)
+
+export const IconDevices = ({ size = 16, ...p }: IconProps) => (
+  <svg {...base(size)} {...p}>
+    <rect x="2" y="4" width="14" height="10" rx="2" />
+    <path d="M6 18h6" />
+    <rect x="16" y="9" width="6" height="11" rx="1.5" />
+  </svg>
+)

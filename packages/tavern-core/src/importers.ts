@@ -1,3 +1,4 @@
+import { isZipBytes, readZipEntries } from './inflate.ts'
 import {
   bytesToDataUrl,
   createMinimalPlaceholderPng,
@@ -25,12 +26,28 @@ type JsonRecord = Record<string, unknown>
 const isRecord = (v: unknown): v is JsonRecord =>
   v !== null && typeof v === 'object' && !Array.isArray(v)
 
+const parseJsonSafe = (rawText: string): unknown => {
+  const cleaned = rawText.replace(/^\uFEFF/, '').trim()
+  return JSON.parse(cleaned) as unknown
+}
+
 const asString = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback)
 
-const asNumber = (v: unknown, fallback: number): number =>
-  typeof v === 'number' && Number.isFinite(v) ? v : fallback
+const asNumber = (v: unknown, fallback: number): number => {
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string' && v.trim() !== '') {
+    const parsed = Number(v.trim())
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return fallback
+}
 
-const asBool = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : fallback)
+const asBool = (v: unknown, fallback: boolean): boolean => {
+  if (typeof v === 'boolean') return v
+  if (v === 'true' || v === 1) return true
+  if (v === 'false' || v === 0) return false
+  return fallback
+}
 
 const asStringArray = (v: unknown): string[] => {
   if (Array.isArray(v)) {
@@ -149,7 +166,10 @@ export function importSillyTavernWorldJson(
   rawJson: unknown,
   fallbackName = '导入的世界卡'
 ): WorldComponent {
-  const parsed = typeof rawJson === 'string' ? (JSON.parse(rawJson) as unknown) : rawJson
+  const parsed = typeof rawJson === 'string' ? parseJsonSafe(rawJson) : rawJson
+  if (Array.isArray(parsed)) {
+    return importSillyTavernWorldJson({ name: fallbackName, entries: parsed }, fallbackName)
+  }
   if (!isRecord(parsed)) {
     throw new Error('无效的世界书 JSON 格式')
   }
@@ -169,15 +189,19 @@ export function importSillyTavernWorldJson(
     const item = rawList[idx]
     if (!isRecord(item)) continue
     const ext = isRecord(item.extensions) ? item.extensions : {}
-    const content = asString(item.content)
-    const comment = asString(item.comment) || asString(item.name) || `条目 ${idx + 1}`
+    const content = asString(item.content) || asString(item.text)
+    const comment =
+      asString(item.comment) ||
+      asString(item.name) ||
+      asString(item.displayName) ||
+      `条目 ${idx + 1}`
     const keys = asStringArray(item.key ?? item.keys)
     const secondaryKeys = asStringArray(item.keysecondary ?? item.secondary_keys)
     const disabled =
-      typeof item.disable === 'boolean'
-        ? item.disable
-        : typeof item.enabled === 'boolean'
-          ? !item.enabled
+      typeof item.disable !== 'undefined'
+        ? asBool(item.disable, false)
+        : typeof item.enabled !== 'undefined'
+          ? !asBool(item.enabled, true)
           : false
 
     entries.push({
@@ -187,7 +211,7 @@ export function importSillyTavernWorldJson(
       keys,
       secondaryKeys,
       selectiveLogic: mapStSelectiveLogic(item.selectiveLogic ?? ext.selectiveLogic),
-      constant: asBool(item.constant, false),
+      constant: asBool(item.constant ?? item.forceActivation, false),
       enabled: !disabled,
       order: asNumber(item.order ?? item.insertion_order, 100),
       position: mapStPosition(ext.position ?? item.position),
@@ -297,18 +321,25 @@ export function importSillyTavernCharacterJson(
   rawJson: unknown,
   options?: { avatarDataUrl?: string; fallbackName?: string }
 ): ImportedCharacterBundle {
-  const parsed = typeof rawJson === 'string' ? (JSON.parse(rawJson) as unknown) : rawJson
+  const parsed = typeof rawJson === 'string' ? parseJsonSafe(rawJson) : rawJson
   if (!isRecord(parsed)) {
     throw new Error('无效的角色卡 JSON 格式')
   }
 
-  // V2/V3 卡片核心字段在 `data` 内，V1 在顶层
-  const data = isRecord(parsed.data) ? parsed.data : parsed
+  // V2/V3 卡片核心字段在 `data` 内，部分包装格式在 `character`/`card` 内，V1 在顶层
+  const rootObj = isRecord(parsed.character)
+    ? parsed.character
+    : isRecord(parsed.card)
+      ? parsed.card
+      : parsed
+  const data = isRecord(rootObj.data) ? rootObj.data : rootObj
   const ext = isRecord(data.extensions) ? data.extensions : {}
   const name =
     asString(data.name).trim() ||
-    asString(parsed.name).trim() ||
-    (options?.fallbackName ?? '未命名角色').replace(/\.(png|json)$/i, '')
+    asString(data.char_name).trim() ||
+    asString(rootObj.name).trim() ||
+    asString(rootObj.char_name).trim() ||
+    (options?.fallbackName ?? '未命名角色').replace(/\.(png|json|charx|card)$/i, '')
 
   let depthPrompt: CharacterComponent['payload']['depthPrompt']
   if (isRecord(ext.depth_prompt) && asString(ext.depth_prompt.prompt).trim()) {
@@ -325,19 +356,36 @@ export function importSillyTavernCharacterJson(
     kind: 'character',
     name,
     avatar: options?.avatarDataUrl,
-    tags: asStringArray(data.tags ?? parsed.tags),
+    tags: asStringArray(data.tags ?? rootObj.tags),
     payload: {
-      description: asString(data.description ?? parsed.description),
-      personality: asString(data.personality ?? parsed.personality),
-      scenario: asString(data.scenario ?? parsed.scenario),
-      firstMessage: asString(data.first_mes ?? parsed.first_mes),
+      description:
+        asString(data.description) ||
+        asString(data.char_persona) ||
+        asString(rootObj.description) ||
+        asString(rootObj.char_persona),
+      personality: asString(data.personality) || asString(rootObj.personality),
+      scenario:
+        asString(data.scenario) ||
+        asString(data.world_scenario) ||
+        asString(rootObj.scenario) ||
+        asString(rootObj.world_scenario),
+      firstMessage:
+        asString(data.first_mes) ||
+        asString(data.char_greeting) ||
+        asString(rootObj.first_mes) ||
+        asString(rootObj.char_greeting),
       alternateGreetings: asStringArray(data.alternate_greetings),
-      exampleDialogue: asString(data.mes_example ?? parsed.mes_example),
-      systemPrompt: asString(data.system_prompt),
-      postHistoryInstructions: asString(data.post_history_instructions),
-      creatorNotes: asString(data.creator_notes ?? parsed.creatorcomment),
-      creator: asString(data.creator) || undefined,
-      characterVersion: asString(data.character_version) || undefined,
+      exampleDialogue:
+        asString(data.mes_example) ||
+        asString(data.example_dialogue) ||
+        asString(rootObj.mes_example) ||
+        asString(rootObj.example_dialogue),
+      systemPrompt: asString(data.system_prompt) || asString(rootObj.system_prompt),
+      postHistoryInstructions:
+        asString(data.post_history_instructions) || asString(rootObj.post_history_instructions),
+      creatorNotes: asString(data.creator_notes ?? rootObj.creatorcomment ?? data.creatorcomment),
+      creator: asString(data.creator ?? rootObj.creator) || undefined,
+      characterVersion: asString(data.character_version ?? rootObj.character_version) || undefined,
       depthPrompt,
       regexScripts: parseStRegexScripts(ext.regex_scripts),
       rawExtensions: Object.keys(ext).length > 0 ? ext : undefined,
@@ -482,40 +530,93 @@ export function importSillyTavernPresetJson(
   rawJson: unknown,
   fallbackName = '导入的酒馆预设'
 ): RuleComponent {
-  const parsed = typeof rawJson === 'string' ? (JSON.parse(rawJson) as unknown) : rawJson
+  const parsed = typeof rawJson === 'string' ? parseJsonSafe(rawJson) : rawJson
   if (!isRecord(parsed)) {
     throw new Error('无效的预设 JSON 格式')
   }
 
   const prompts = Array.isArray(parsed.prompts) ? parsed.prompts.filter(isRecord) : []
-  const mainPrompt = prompts.find((p) => p.identifier === 'main')
-  const jailbreakPrompt = prompts.find((p) => p.identifier === 'jailbreak')
-  const nsfwPrompt = prompts.find((p) => p.identifier === 'nsfw')
+  const promptMap = new Map<string, JsonRecord>()
+  for (const p of prompts) {
+    const id = asString(p.identifier).trim()
+    if (id) promptMap.set(id, p)
+  }
 
-  const systemParts = [
-    asString(mainPrompt?.content ?? parsed.main_prompt).trim(),
-    asString(nsfwPrompt?.content ?? parsed.nsfw_prompt).trim(),
-  ].filter(Boolean)
+  const orderLists = Array.isArray(parsed.prompt_order) ? parsed.prompt_order.filter(isRecord) : []
+  const activeOrderEntry =
+    orderLists.find((entry) => entry.character_id === 100001) ??
+    orderLists.find((entry) => Array.isArray(entry.order))
+  const orderedIds = Array.isArray(activeOrderEntry?.order)
+    ? activeOrderEntry.order.filter(isRecord)
+    : []
 
-  const postHistory = asString(jailbreakPrompt?.content ?? parsed.jailbreak_prompt).trim()
+  const systemParts: string[] = []
+  const jailbreakParts: string[] = []
+
+  if (orderedIds.length > 0) {
+    for (const item of orderedIds) {
+      if (item.enabled === false) continue
+      const id = asString(item.identifier).trim()
+      const p = promptMap.get(id)
+      const content = asString(p?.content).trim()
+      if (!content) continue
+      if (id === 'jailbreak') {
+        jailbreakParts.push(content)
+      } else {
+        systemParts.push(content)
+      }
+    }
+  } else {
+    const mainPrompt = promptMap.get('main')
+    const jailbreakPrompt = promptMap.get('jailbreak')
+    const nsfwPrompt = promptMap.get('nsfw')
+    const textMain = asString(
+      mainPrompt?.content ??
+        parsed.main_prompt ??
+        parsed.system_prompt ??
+        parsed.story_string ??
+        parsed.prompt
+    ).trim()
+    const textNsfw = asString(nsfwPrompt?.content ?? parsed.nsfw_prompt).trim()
+    if (textMain) systemParts.push(textMain)
+    if (textNsfw) systemParts.push(textNsfw)
+    const jb = asString(jailbreakPrompt?.content ?? parsed.jailbreak_prompt).trim()
+    if (jb) jailbreakParts.push(jb)
+  }
 
   const now = Date.now()
   return {
     id: makeId('rule'),
     kind: 'rule',
-    name: fallbackName.replace(/\.json$/i, ''),
+    name: asString(parsed.name).trim() || fallbackName.replace(/\.(json|card)$/i, ''),
     tags: ['预设'],
     payload: {
-      description: '从 SillyTavern 预设导入',
+      description: asString(parsed.description).trim() || '从 SillyTavern 预设导入',
       systemPrompt: systemParts.join('\n\n'),
-      postHistoryInstructions: postHistory,
+      postHistoryInstructions: jailbreakParts.join('\n\n'),
       newChatPrompt: asString(parsed.new_chat_prompt) || undefined,
       groupNudgePrompt: asString(parsed.group_nudge_prompt) || undefined,
-      temperature: typeof parsed.temperature === 'number' ? parsed.temperature : undefined,
+      temperature:
+        typeof parsed.temperature === 'number'
+          ? parsed.temperature
+          : typeof parsed.temp === 'number'
+            ? parsed.temp
+            : undefined,
       topP: typeof parsed.top_p === 'number' ? parsed.top_p : undefined,
-      maxTokens: typeof parsed.openai_max_tokens === 'number' ? parsed.openai_max_tokens : undefined,
+      maxTokens:
+        typeof parsed.openai_max_tokens === 'number'
+          ? parsed.openai_max_tokens
+          : typeof parsed.max_tokens === 'number'
+            ? parsed.max_tokens
+            : typeof parsed.max_length === 'number'
+              ? parsed.max_length
+              : undefined,
       maxContextTokens:
-        typeof parsed.openai_max_context === 'number' ? parsed.openai_max_context : undefined,
+        typeof parsed.openai_max_context === 'number'
+          ? parsed.openai_max_context
+          : typeof parsed.max_context === 'number'
+            ? parsed.max_context
+            : undefined,
     },
     createdAt: now,
     updatedAt: now,
@@ -629,10 +730,54 @@ export function smartImportFile(
 ): DetectedImportResult {
   const lower = fileName.toLowerCase()
 
-  if (content instanceof Uint8Array && (lower.endsWith('.png') || isPngBytes(content))) {
+  if (content instanceof Uint8Array && (lower.endsWith('.charx') || isZipBytes(content))) {
+    const entries = readZipEntries(content)
+    const cardEntry =
+      entries.find((e) => /(^|\/)card\.json$/i.test(e.name)) ??
+      entries.find((e) => /\.json$/i.test(e.name))
+    if (!cardEntry) {
+      throw new Error('CHARX / ZIP 包中未找到角色卡 JSON 文件（card.json）')
+    }
+    const avatarEntry =
+      entries.find((e) => /^assets\/icon\/.*\/main\.(png|webp|jpg|jpeg)$/i.test(e.name)) ??
+      entries.find((e) => /^assets\/icon\/.*\.(png|webp|jpg|jpeg)$/i.test(e.name)) ??
+      entries.find((e) => /\.(png|webp|jpg|jpeg)$/i.test(e.name))
+    let avatarDataUrl: string | undefined
+    if (avatarEntry) {
+      const ext = avatarEntry.name.split('.').pop()?.toLowerCase()
+      const mime =
+        ext === 'webp'
+          ? 'image/webp'
+          : ext === 'jpg' || ext === 'jpeg'
+            ? 'image/jpeg'
+            : 'image/png'
+      avatarDataUrl = bytesToDataUrl(avatarEntry.data, mime)
+    }
+    const jsonText = new TextDecoder('utf-8').decode(cardEntry.data)
     return {
       kind: 'character',
-      bundle: importSillyTavernCharacterPng(content, fileName),
+      bundle: importSillyTavernCharacterJson(jsonText, {
+        avatarDataUrl,
+        fallbackName: fileName,
+      }),
+    }
+  }
+
+  if (content instanceof Uint8Array) {
+    if (isPngBytes(content)) {
+      return {
+        kind: 'character',
+        bundle: importSillyTavernCharacterPng(content, fileName),
+      }
+    }
+    if (lower.endsWith('.png')) {
+      const head = new TextDecoder('utf-8').decode(content.subarray(0, 64)).trimStart()
+      if (!head.startsWith('{') && !head.startsWith('[')) {
+        return {
+          kind: 'character',
+          bundle: importSillyTavernCharacterPng(content, fileName),
+        }
+      }
     }
   }
 
@@ -644,7 +789,13 @@ export function smartImportFile(
     return { kind: 'chat_jsonl', ...res }
   }
 
-  const parsed = JSON.parse(text) as unknown
+  const parsed = parseJsonSafe(text)
+  if (Array.isArray(parsed)) {
+    return {
+      kind: 'world',
+      world: importSillyTavernWorldJson(parsed, fileName),
+    }
+  }
   if (!isRecord(parsed)) {
     throw new Error('暂不支持的 JSON 文件格式')
   }
@@ -659,7 +810,7 @@ export function smartImportFile(
     }
   }
 
-  // 2. 酒馆世界书 JSON
+  // 2. 酒馆 / NovelAI 世界书 JSON
   if ('entries' in parsed && (isRecord(parsed.entries) || Array.isArray(parsed.entries))) {
     return {
       kind: 'world',
@@ -667,13 +818,17 @@ export function smartImportFile(
     }
   }
 
-  // 3. 酒馆角色卡 V2/V3 或 V1 JSON
+  // 3. 酒馆角色卡 V2/V3 或 V1/Pygmalion JSON
   if (
     parsed.spec === 'chara_card_v2' ||
     parsed.spec === 'chara_card_v3' ||
-    (isRecord(parsed.data) && 'first_mes' in parsed.data) ||
+    isRecord(parsed.character) ||
+    isRecord(parsed.card) ||
+    (isRecord(parsed.data) && ('first_mes' in parsed.data || 'name' in parsed.data)) ||
     'first_mes' in parsed ||
-    'char_persona' in parsed
+    'char_persona' in parsed ||
+    'char_greeting' in parsed ||
+    'char_name' in parsed
   ) {
     return {
       kind: 'character',
@@ -681,8 +836,15 @@ export function smartImportFile(
     }
   }
 
-  // 4. 酒馆 OpenAI 预设 JSON
-  if (Array.isArray(parsed.prompts) || 'chat_completion_source' in parsed || 'main_prompt' in parsed) {
+  // 4. 酒馆 OpenAI / TextCompletion / Instruct 预设 JSON
+  if (
+    Array.isArray(parsed.prompts) ||
+    'chat_completion_source' in parsed ||
+    'main_prompt' in parsed ||
+    'system_prompt' in parsed ||
+    'story_string' in parsed ||
+    'instruct' in parsed
+  ) {
     return {
       kind: 'rule',
       rule: importSillyTavernPresetJson(parsed, fileName),
@@ -697,5 +859,5 @@ export function smartImportFile(
     }
   }
 
-  throw new Error('无法识别该 JSON 文件：请导入酒馆角色卡、世界书、预设、聊天记录或 TavernChat 备份')
+  throw new Error('无法识别该 JSON 文件：请导入酒馆 PNG / CHARX 角色卡、世界书、预设、聊天记录或 TavernChat 备份')
 }

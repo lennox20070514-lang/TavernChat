@@ -10,9 +10,11 @@ import { createPortal } from 'react-dom'
 import type { ChatSession } from '@tavern-chat/core'
 import { useSettings } from '../../services/settings.ts'
 import { useAppStore } from '../../services/store.ts'
+import { useSyncStore } from '../../services/sync.ts'
 import {
   IconCheck,
   IconClose,
+  IconDevices,
   IconEdit,
   IconGlobe,
   IconLayers,
@@ -66,8 +68,10 @@ const SiderInner = ({ mobile }: { mobile: boolean }) => {
   const setSessionPinned = useAppStore((s) => s.setSessionPinned)
   const openLibrary = useAppStore((s) => s.openLibrary)
   const setMarketOpen = useAppStore((s) => s.setMarketOpen)
+  const setLanConnectOpen = useAppStore((s) => s.setLanConnectOpen)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const setMobileSiderOpen = useAppStore((s) => s.setMobileSiderOpen)
+  const syncRole = useSyncStore((s) => s.role)
   const setSiderCollapsed = useSettings((s) => s.setSiderCollapsed)
 
   const compMap = useMemo(() => new Map(components.map((c) => [c.id, c])), [components])
@@ -409,6 +413,20 @@ const SiderInner = ({ mobile }: { mobile: boolean }) => {
           <span className={styles.badge}>
             {components.filter((component) => component.kind !== 'persona').length}
           </span>
+        </button>
+        <button
+          type="button"
+          className={styles.footerBtn}
+          onClick={() => {
+            setMobileSiderOpen(false)
+            setLanConnectOpen(true)
+          }}
+        >
+          <span className={styles.footerLeft}>
+            <IconDevices />
+            <span>多设备连接</span>
+          </span>
+          {syncRole !== 'idle' ? <span className={styles.badge}>已连接</span> : null}
         </button>
         <button
           type="button"

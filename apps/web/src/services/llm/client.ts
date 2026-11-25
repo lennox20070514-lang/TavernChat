@@ -8,13 +8,40 @@ export type StreamChunkEvent =
   | { type: 'error'; message: string }
 
 let cachedGatewayOrigin: string | null | undefined
+let cachedSyncOrigin: string | null | undefined
+
+type HealthResponse = {
+  ok?: boolean
+  app?: string
+  mode?: string
+  capabilities?: {
+    proxy?: boolean
+    market?: boolean
+    sync?: boolean
+  }
+}
+
+export function resetHostDiscoveryCache(): void {
+  cachedGatewayOrigin = undefined
+  cachedSyncOrigin = undefined
+}
+
+export async function probeTavernHealth(originPrefix: string): Promise<HealthResponse | null> {
+  try {
+    const res = await fetch(`${originPrefix}/api/v1/health`, {
+      signal: AbortSignal.timeout(1500),
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as HealthResponse
+    if (data.ok && data.app === 'TavernChat') return data
+  } catch {
+    // 无可用网关/同步端
+  }
+  return null
+}
 
 /**
- * 探测可用的本地网关：
- * 1. Electron 桌面端内嵌的 127.0.0.1 微网关
- * 2. 用户在设置中填写的局域网网关（如手机连电脑）
- * 3. 开发模式同源 `/api/v1/health` 代理
- * 4. 全部不可用则返回 null，自动切换为客户端直连模式（Android / PWA 离线友好）
+ * 探测可用的代理网关（用于消除模型/市场接口的浏览器 CORS 限制）。
  */
 export async function resolveGatewayOrigin(customOrigin?: string): Promise<string | null> {
   if (typeof window !== 'undefined' && window.tavernDesktop?.getGatewayOrigin) {
@@ -22,28 +49,47 @@ export async function resolveGatewayOrigin(customOrigin?: string): Promise<strin
     if (origin) return origin
   }
   if (customOrigin?.trim()) {
-    return customOrigin.trim().replace(/\/+$/, '')
+    const clean = customOrigin.trim().replace(/\/+$/, '')
+    const health = await probeTavernHealth(clean)
+    return health?.capabilities?.proxy === false ? null : clean
   }
   if (cachedGatewayOrigin !== undefined) {
     return cachedGatewayOrigin
   }
-  try {
-    const res = await fetch('/api/v1/health', { signal: AbortSignal.timeout(1500) })
-    if (res.ok) {
-      const data = (await res.json()) as { ok?: boolean; app?: string }
-      if (data.ok && data.app === 'TavernChat') {
-        cachedGatewayOrigin = ''
-        return ''
-      }
-    }
-  } catch {
-    // 无同源网关，回退直连
+  const health = await probeTavernHealth('')
+  if (health && health.capabilities?.proxy !== false) {
+    cachedGatewayOrigin = ''
+    return ''
   }
   cachedGatewayOrigin = null
   return null
 }
 
+/**
+ * 探测可用的多设备数据同步主机（手机主机 / 桌面端主机 / 局域网主机）。
+ */
+export async function resolveSyncHostOrigin(customOrigin?: string): Promise<string | null> {
+  if (customOrigin?.trim()) {
+    const clean = customOrigin.trim().replace(/\/+$/, '')
+    const health = await probeTavernHealth(clean)
+    return health?.capabilities?.sync ? clean : null
+  }
+  if (cachedSyncOrigin !== undefined) {
+    return cachedSyncOrigin
+  }
+  const health = await probeTavernHealth('')
+  if (health?.capabilities?.sync) {
+    cachedSyncOrigin = ''
+    return ''
+  }
+  cachedSyncOrigin = null
+  return null
+}
+
 const normalizeUrl = (u: string) => u.trim().replace(/\/+$/, '')
+
+const stripEndpointSuffix = (u: string) =>
+  normalizeUrl(u).replace(/\/(?:chat\/completions|messages)$/i, '')
 
 const hasVersionSegment = (u: string) => {
   try {
@@ -89,7 +135,10 @@ export async function fetchProviderModels(
   }
 
   // 客户端直连模式
-  const clean = normalizeUrl(provider.baseUrl)
+  const clean = stripEndpointSuffix(provider.baseUrl)
+  if (!clean) {
+    throw new Error('请先填写中转站 / 接口地址（Base URL）')
+  }
   const url = hasVersionSegment(clean) ? `${clean}/models` : `${clean}/v1/models`
   const headers: Record<string, string> = {}
   if (provider.apiKey) {
