@@ -14,6 +14,7 @@
     "apk:sync": "corepack pnpm --filter @tavern-chat/web apk:sync",
     "apk:debug": "corepack pnpm --filter @tavern-chat/web apk:sync && node scripts/build-apk.mjs",
     "apk:release": "corepack pnpm --filter @tavern-chat/web apk:sync && node scripts/build-apk.mjs --release",
-    "exe:build": "corepack pnpm --filter @tavern-chat/desktop build"
+    "exe:build": "corepack pnpm --filter @tavern-chat/desktop build",
+    "release:pack": "node scripts/pack-release.mjs"
   }
 }

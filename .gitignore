@@ -2,6 +2,7 @@ node_modules/
 dist/
 release/
 release-out/
+TavernChat-*-发布包/
 apps/web/release/
 web-dist/
 ref/
