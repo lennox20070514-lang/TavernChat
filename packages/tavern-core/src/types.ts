@@ -189,9 +189,40 @@ export type MountedComponent = {
   disabledWorldEntryIds?: string[]
   /** 仅针对角色卡：当前选用的开场白索引（0 为主开场白，>=1 为 alternateGreetings） */
   greetingIndex?: number
+  /** 仅针对角色卡：群聊中是否暂时静音（闭麦，不参与自动轮流） */
+  muted?: boolean
+  /** 仅针对角色卡：自然接话策略下的话痨度（0-100，默认 60） */
+  talkativeness?: number
 }
 
-export type MultiCharMode = 'narrator' | 'round_robin' | 'manual'
+export type MultiCharMode =
+  | 'shuffled_round'
+  | 'natural'
+  | 'round_robin'
+  | 'manual'
+  | 'narrator'
+
+export type GroupGenerationMode = 'swap' | 'join'
+
+/** 参照 SillyTavern 原生群聊的进阶控制项（会话级配置） */
+export type GroupChatConfig = {
+  /** 角色卡生成处理：'swap' 分角隔离（推荐） | 'join' 合并全部活跃角色卡 */
+  generationMode: GroupGenerationMode
+  /** 每轮连续发言人数上限（0 表示当前未静音成员全员轮流各发一句） */
+  maxRepliesPerTurn: number
+  /** 鼓励在场角色彼此接茬、吐槽或反驳（提高群聊沉浸与戏剧张力） */
+  encourageInteraction: boolean
+  /** 在成员栏中隐藏已静音的角色 */
+  hideMuted: boolean
+  /** 自动续聊模式（Auto Mode）：角色说完一轮后延迟继续下一轮 */
+  autoMode: boolean
+  /** Auto Mode 自动触发间隔秒数 */
+  autoModeDelaySec: number
+  /** Join 模式下每张角色卡前拼接的标记模板（支持 {{char}}） */
+  joinPrefix?: string
+  /** 是否允许同一角色连续发言（Allow Self Responses） */
+  allowSelfReply?: boolean
+}
 
 export type TriggeredWorldSnapshot = {
   worldId: string
@@ -250,6 +281,8 @@ export type ChatSession = {
   authorsNoteDepth: number
   /** 多角色对话模式 */
   multiCharMode: MultiCharMode
+  /** 多角色群聊高阶配置（参照 SillyTavern Group Chat） */
+  groupConfig?: GroupChatConfig
   /** 当前指向的活跃叶节点消息 ID，用于分支 / Swipe 切换 */
   activeLeafId: string | null
   /** 本对话的上下文压缩检查点；原始消息始终完整保留 */

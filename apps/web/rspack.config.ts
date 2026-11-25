@@ -16,7 +16,10 @@ const gradleVersionCode = Number(buildGradle.match(/versionCode\s*\(?.*?(\d+)/)?
 const appVersion = process.env.TAVERN_VERSION_NAME || rootPkg.version || '0.1.0'
 const androidVersionCode =
   Number(process.env.TAVERN_VERSION_CODE || gradleVersionCode || '1') || 1
-const githubRepo = process.env.TAVERN_GITHUB_REPO || process.env.GITHUB_REPOSITORY || ''
+const githubRepo =
+  process.env.TAVERN_GITHUB_REPO ||
+  process.env.GITHUB_REPOSITORY ||
+  'lennox20070514-lang/TavernChat'
 const defaultUpdateManifestUrl =
   process.env.TAVERN_UPDATE_MANIFEST_URL ||
   (githubRepo ? `https://github.com/${githubRepo}/releases/latest/download/latest.json` : '')

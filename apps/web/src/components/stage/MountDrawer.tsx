@@ -1,11 +1,14 @@
 import clsx from 'clsx'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type {
-  CharacterComponent,
-  ComponentKind,
-  MultiCharMode,
-  WorldComponent,
+import {
+  resolveGroupChatConfig,
+  type CharacterComponent,
+  type ComponentKind,
+  type GroupGenerationMode,
+  type MountedComponent,
+  type MultiCharMode,
+  type WorldComponent,
 } from '@tavern-chat/core'
 import { useAppStore } from '../../services/store.ts'
 import { resizeImageFileToAvatarDataUrl } from '../../utils/defaultAvatars.ts'
@@ -13,6 +16,7 @@ import {
   IconCheck,
   IconChevronDown,
   IconChevronRight,
+  IconChevronUp,
   IconClose,
   IconEdit,
   IconGlobe,
@@ -57,10 +61,31 @@ const CATEGORY_META: Array<{
   },
 ]
 
-const MULTI_MODES: Array<{ value: MultiCharMode; label: string }> = [
-  { value: 'narrator', label: '联合演绎' },
-  { value: 'round_robin', label: '自动轮流' },
-  { value: 'manual', label: '手动点名' },
+const GROUP_STRATEGIES: Array<{
+  value: MultiCharMode
+  label: string
+  hint: string
+}> = [
+  {
+    value: 'shuffled_round',
+    label: '随机轮流',
+    hint: '预设推荐：每轮随机洗牌顺序，未静音成员依次各发一句并互相接茬。',
+  },
+  {
+    value: 'natural',
+    label: '自然接话',
+    hint: '酒馆自然策略：先响应被点名角色，再按话痨度摇号接话，冷场随机补位。',
+  },
+  {
+    value: 'round_robin',
+    label: '顺序轮流',
+    hint: '严格按下方成员列表从上到下顺序排班接话。',
+  },
+  {
+    value: 'manual',
+    label: '手动点名',
+    hint: '发消息后不自动代发，随时在输入框上方点击角色头像指定谁来发言。',
+  },
 ]
 
 const KindIcon = ({ kind }: { kind: ComponentKind }) => {
@@ -79,6 +104,7 @@ const DrawerContent = ({ open }: { open: boolean }) => {
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [povMenuOpen, setPovMenuOpen] = useState(false)
+  const [advancedGroupOpen, setAdvancedGroupOpen] = useState(false)
   const [expandedWorlds, setExpandedWorlds] = useState<Record<string, boolean>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const povAvatarFileRef = useRef<HTMLInputElement>(null)
@@ -98,6 +124,9 @@ const DrawerContent = ({ open }: { open: boolean }) => {
   const toggleWorldEntryOverride = useAppStore((s) => s.toggleWorldEntryOverride)
   const updateAuthorsNote = useAppStore((s) => s.updateAuthorsNote)
   const setMultiCharMode = useAppStore((s) => s.setMultiCharMode)
+  const updateGroupConfig = useAppStore((s) => s.updateGroupConfig)
+  const moveCharMountOrder = useAppStore((s) => s.moveCharMountOrder)
+  const updateCharMountMeta = useAppStore((s) => s.updateCharMountMeta)
   const setUserCharacter = useAppStore((s) => s.setUserCharacter)
   const clearContextCheckpoints = useAppStore((s) => s.clearContextCheckpoints)
   const insertCharacterGreeting = useAppStore((s) => s.insertCharacterGreeting)
@@ -135,7 +164,23 @@ const DrawerContent = ({ open }: { open: boolean }) => {
   const mountByCompId = new Map(session.mounts.map((m) => [m.componentId, m]))
   const totalActive =
     session.mounts.filter((m) => m.enabled).length + (session.userCharacterId ? 1 : 0)
-  const mountedCharCount = session.mounts.filter((m) => m.kind === 'character' && m.enabled).length
+  const mountedChars = session.mounts
+    .filter((m) => m.kind === 'character' && m.enabled && m.componentId !== session.userCharacterId)
+    .sort((a, b) => a.order - b.order)
+    .map((m) => ({
+      mount: m,
+      char: components.find((c) => c.id === m.componentId) as CharacterComponent | undefined,
+    }))
+    .filter((item): item is { mount: MountedComponent; char: CharacterComponent } =>
+      Boolean(item.char)
+    )
+  const mountedCharCount = mountedChars.length
+  const groupCfg = resolveGroupChatConfig(session)
+  const activeStrategyInfo = GROUP_STRATEGIES.find((g) => g.value === session.multiCharMode)
+  const visibleRoster = groupCfg.hideMuted
+    ? mountedChars.filter((item) => !item.mount.muted)
+    : mountedChars
+  const hiddenMutedCount = mountedChars.length - visibleRoster.length
   const query = searchOpen ? search.trim().toLowerCase() : ''
 
   const povCharacters = components
@@ -633,10 +678,21 @@ const DrawerContent = ({ open }: { open: boolean }) => {
         {mountedCharCount >= 2 ? (
           <div className={styles.noteBox}>
             <div className={styles.sectionLabel}>
-              <span>多角色协同模式（{mountedCharCount} 位在场）</span>
+              <span>群聊演绎（{mountedCharCount} 位在场）</span>
+              <button
+                type="button"
+                className={clsx(styles.advancedBtn, advancedGroupOpen && styles.advancedBtnActive)}
+                aria-expanded={advancedGroupOpen}
+                onClick={() => setAdvancedGroupOpen((v) => !v)}
+              >
+                <IconSliders size={11} />
+                <span>高级</span>
+                {advancedGroupOpen ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />}
+              </button>
             </div>
-            <div className={styles.modeGroup}>
-              {MULTI_MODES.map((m) => (
+
+            <div className={styles.modeGrid}>
+              {GROUP_STRATEGIES.map((m) => (
                 <button
                   key={m.value}
                   type="button"
@@ -650,6 +706,233 @@ const DrawerContent = ({ open }: { open: boolean }) => {
                 </button>
               ))}
             </div>
+
+            <div className={styles.groupHintLine}>
+              {session.multiCharMode === 'narrator'
+                ? '当前为联合旁白体（单条叙事合写）；点击上方任意策略可切回分角独立头像互聊。'
+                : activeStrategyInfo?.hint}
+            </div>
+
+            <div className={styles.rosterList}>
+              {visibleRoster.map(({ mount, char }, idx) => {
+                const isMuted = Boolean(mount.muted)
+                const talkPct = mount.talkativeness ?? 60
+                return (
+                  <div
+                    key={char.id}
+                    className={clsx(styles.rosterItem, isMuted && styles.rosterItemMuted)}
+                  >
+                    <div className={styles.rosterMain}>
+                      <div className={styles.rosterArrows}>
+                        <button
+                          type="button"
+                          className={styles.rosterArrowBtn}
+                          disabled={idx === 0 && !groupCfg.hideMuted}
+                          title="上移顺序"
+                          aria-label={`上移 ${char.name}`}
+                          onClick={() => void moveCharMountOrder(char.id, -1)}
+                        >
+                          <IconChevronUp size={11} />
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.rosterArrowBtn}
+                          disabled={idx === visibleRoster.length - 1 && !groupCfg.hideMuted}
+                          title="下移顺序"
+                          aria-label={`下移 ${char.name}`}
+                          onClick={() => void moveCharMountOrder(char.id, 1)}
+                        >
+                          <IconChevronDown size={11} />
+                        </button>
+                      </div>
+
+                      {char.avatar ? (
+                        <img className={styles.rosterAvatar} src={char.avatar} alt="" />
+                      ) : (
+                        <span className={styles.rosterAvatar}>{char.name.slice(0, 1)}</span>
+                      )}
+
+                      <span className={styles.rosterName}>{char.name}</span>
+
+                      <button
+                        type="button"
+                        className={clsx(styles.muteChip, isMuted && styles.muteChipOn)}
+                        title={isMuted ? '取消静音，恢复参与接话' : '静音此角色（暂不参与自动轮流）'}
+                        onClick={() => void updateCharMountMeta(char.id, { muted: !isMuted })}
+                      >
+                        {isMuted ? '已静音' : '发言中'}
+                      </button>
+                    </div>
+
+                    {advancedGroupOpen || session.multiCharMode === 'natural' ? (
+                      <div className={styles.talkRow}>
+                        <span className={styles.talkLabel}>话痨度</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={10}
+                          value={talkPct}
+                          className={styles.talkSlider}
+                          onChange={(e) =>
+                            void updateCharMountMeta(char.id, {
+                              talkativeness: Number(e.target.value),
+                            })
+                          }
+                        />
+                        <span className={styles.talkVal}>{talkPct}%</span>
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })}
+              {hiddenMutedCount > 0 ? (
+                <div className={styles.groupHintLine}>已隐藏 {hiddenMutedCount} 位静音角色</div>
+              ) : null}
+            </div>
+
+            {advancedGroupOpen ? (
+              <div className={styles.groupAdvBox}>
+                <div className={styles.advField}>
+                  <span className={styles.advLabel}>每轮连续发言人数</span>
+                  <div className={styles.modeGroup}>
+                    {[
+                      { val: 0, label: '全员一轮' },
+                      { val: 1, label: '每次 1 位' },
+                      { val: 2, label: '每次 2 位' },
+                    ].map((opt) => (
+                      <button
+                        key={opt.val}
+                        type="button"
+                        className={clsx(
+                          styles.modeBtn,
+                          groupCfg.maxRepliesPerTurn === opt.val && styles.modeBtnActive
+                        )}
+                        onClick={() => void updateGroupConfig({ maxRepliesPerTurn: opt.val })}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <label className={styles.advSwitchRow}>
+                  <div>
+                    <div className={styles.advSwitchTitle}>鼓励互相接茬 / 拌嘴互动</div>
+                    <div className={styles.groupHintLine}>后发言角色主动回应或反驳前一位的话</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={groupCfg.encourageInteraction}
+                    onChange={(e) =>
+                      void updateGroupConfig({ encourageInteraction: e.target.checked })
+                    }
+                  />
+                </label>
+
+                <div className={styles.advField}>
+                  <label className={styles.advSwitchRow}>
+                    <div>
+                      <div className={styles.advSwitchTitle}>自动续聊（Auto Mode）</div>
+                      <div className={styles.groupHintLine}>
+                        角色说完一轮自动继续互聊，你在输入框打字即暂停
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={groupCfg.autoMode}
+                      onChange={(e) => void updateGroupConfig({ autoMode: e.target.checked })}
+                    />
+                  </label>
+                  {groupCfg.autoMode ? (
+                    <div className={styles.modeGroup} style={{ marginTop: 4 }}>
+                      {[3, 4, 6, 10].map((sec) => (
+                        <button
+                          key={sec}
+                          type="button"
+                          className={clsx(
+                            styles.modeBtn,
+                            groupCfg.autoModeDelaySec === sec && styles.modeBtnActive
+                          )}
+                          onClick={() => void updateGroupConfig({ autoModeDelaySec: sec })}
+                        >
+                          {sec}秒
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className={styles.advField}>
+                  <span className={styles.advLabel}>卡片提示词模式（Generation Mode）</span>
+                  <div className={styles.modeGroup}>
+                    {(
+                      [
+                        { id: 'swap', label: '分角隔离' },
+                        { id: 'join', label: '合并全卡' },
+                      ] as Array<{ id: GroupGenerationMode; label: string }>
+                    ).map((gm) => {
+                      const active =
+                        session.multiCharMode !== 'narrator' && groupCfg.generationMode === gm.id
+                      return (
+                        <button
+                          key={gm.id}
+                          type="button"
+                          className={clsx(styles.modeBtn, active && styles.modeBtnActive)}
+                          onClick={() => {
+                            if (session.multiCharMode === 'narrator') {
+                              void setMultiCharMode('shuffled_round')
+                            }
+                            void updateGroupConfig({ generationMode: gm.id })
+                          }}
+                        >
+                          {gm.label}
+                        </button>
+                      )
+                    })}
+                    <button
+                      type="button"
+                      className={clsx(
+                        styles.modeBtn,
+                        session.multiCharMode === 'narrator' && styles.modeBtnActive
+                      )}
+                      onClick={() => void setMultiCharMode('narrator')}
+                    >
+                      联合旁白
+                    </button>
+                  </div>
+                </div>
+
+                {groupCfg.generationMode === 'join' && session.multiCharMode !== 'narrator' ? (
+                  <div className={styles.advField}>
+                    <span className={styles.advLabel}>合并角色卡前缀（Join Prefix）</span>
+                    <input
+                      className={styles.advInput}
+                      value={groupCfg.joinPrefix ?? '### {{char}}'}
+                      onChange={(e) => void updateGroupConfig({ joinPrefix: e.target.value })}
+                    />
+                  </div>
+                ) : null}
+
+                <label className={styles.advSwitchRow}>
+                  <span className={styles.advSwitchTitle}>隐藏已静音成员</span>
+                  <input
+                    type="checkbox"
+                    checked={groupCfg.hideMuted}
+                    onChange={(e) => void updateGroupConfig({ hideMuted: e.target.checked })}
+                  />
+                </label>
+
+                <label className={styles.advSwitchRow}>
+                  <span className={styles.advSwitchTitle}>允许同一角色连续发言</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(groupCfg.allowSelfReply)}
+                    onChange={(e) => void updateGroupConfig({ allowSelfReply: e.target.checked })}
+                  />
+                </label>
+              </div>
+            ) : null}
           </div>
         ) : null}
 

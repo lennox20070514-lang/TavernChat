@@ -12,6 +12,7 @@ import { useAppStore } from '../../services/store.ts'
 import {
   addManifestPlugin,
   downloadMarketCard,
+  invalidateMarketCache,
   listMarketPlugins,
   loadMarketCatalog,
   loadMoreMarketCards,
@@ -27,12 +28,15 @@ import {
 } from '../../services/marketAuth.ts'
 import {
   IconCheck,
+  IconChevronDown,
   IconChevronLeft,
+  IconClose,
   IconDownload,
   IconGlobe,
   IconPlus,
   IconRefresh,
   IconSearch,
+  IconSliders,
   IconTrash,
 } from '../base/icons.tsx'
 import { Modal } from '../base/Modal.tsx'
@@ -90,6 +94,10 @@ export const MarketModal = () => {
   const [addingManifest, setAddingManifest] = useState(false)
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<Category>('all')
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([])
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [filterPanel, setFilterPanel] = useState<'source' | 'tag' | null>(null)
+  const [tagQuery, setTagQuery] = useState('')
   const [onlyInstalled, setOnlyInstalled] = useState(false)
   const [downloadingKey, setDownloadingKey] = useState('')
   const [authStatus, setAuthStatus] = useState<Record<string, MarketAuthStatus>>({})
@@ -144,6 +152,11 @@ export const MarketModal = () => {
     setView('catalog')
     setQuery('')
     setCategory('all')
+    setSelectedSourceIds([])
+    setSelectedTags([])
+    setFilterPanel(null)
+    setTagQuery('')
+    setOnlyInstalled(false)
     setPage(1)
     setHasMore(true)
     setRemoteResults(null)
@@ -223,10 +236,9 @@ export const MarketModal = () => {
     }
   }, [query, settings.customGatewayOrigin])
 
-  const filtered = useMemo(() => {
-    const keyword = query.trim().toLocaleLowerCase()
-    const searchMode = keyword.length >= 2
-    const useRemote = searchMode && remoteResults !== null
+  const mergedPool = useMemo(() => {
+    const keyword = query.trim()
+    const useRemote = keyword.length >= 2 && remoteResults !== null
     const merged = new Map<string, MarketCard>()
     if (useRemote) {
       for (const card of remoteResults!) merged.set(cardKey(card), card)
@@ -236,27 +248,147 @@ export const MarketModal = () => {
         merged.set(cardKey(card), card)
       }
     }
-    const sourceCards = Array.from(merged.values())
-    return sourceCards
+    return {
+      cards: Array.from(merged.values()),
+      useRemote,
+      remoteKeySet: useRemote ? new Set(remoteResults!.map(cardKey)) : null,
+    }
+  }, [catalog.cards, query, remoteResults])
+
+  const sourceOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const card of mergedPool.cards) {
+      if (category !== 'all' && card.kind !== category) continue
+      counts.set(card.pluginId, (counts.get(card.pluginId) ?? 0) + 1)
+    }
+    const items = new Map<string, { id: string; name: string; count: number }>()
+    for (const p of plugins) {
+      if (p.auth && !authStatus[p.id]?.loggedIn) continue
+      items.set(p.id, { id: p.id, name: p.name, count: counts.get(p.id) ?? 0 })
+    }
+    for (const s of catalog.sources) {
+      if (s.authRequired && !s.loggedIn) continue
+      if (!items.has(s.id)) {
+        items.set(s.id, { id: s.id, name: s.name, count: counts.get(s.id) ?? 0 })
+      }
+    }
+    for (const card of mergedPool.cards) {
+      if (!items.has(card.pluginId)) {
+        items.set(card.pluginId, {
+          id: card.pluginId,
+          name: card.pluginName,
+          count: counts.get(card.pluginId) ?? 0,
+        })
+      }
+    }
+    return [...items.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN'))
+  }, [mergedPool.cards, category, plugins, catalog.sources, authStatus])
+
+  const tagOptions = useMemo(() => {
+    const counts = new Map<string, { label: string; count: number }>()
+    for (const card of mergedPool.cards) {
+      if (category !== 'all' && card.kind !== category) continue
+      if (selectedSourceIds.length > 0 && !selectedSourceIds.includes(card.pluginId)) continue
+      const seenOnCard = new Set<string>()
+      for (const raw of card.tags) {
+        const clean = raw.trim()
+        if (!clean) continue
+        const lower = clean.toLocaleLowerCase()
+        if (seenOnCard.has(lower)) continue
+        seenOnCard.add(lower)
+        const prev = counts.get(lower)
+        counts.set(lower, { label: prev?.label ?? clean, count: (prev?.count ?? 0) + 1 })
+      }
+    }
+    for (const active of selectedTags) {
+      const lower = active.toLocaleLowerCase()
+      if (!counts.has(lower)) {
+        counts.set(lower, { label: active, count: 0 })
+      }
+    }
+    const q = tagQuery.trim().toLocaleLowerCase()
+    const selectedSet = new Set(selectedTags.map((t) => t.toLocaleLowerCase()))
+    return [...counts.entries()]
+      .filter(([lower]) => !q || lower.includes(q))
+      .sort((a, b) => {
+        const aSel = selectedSet.has(a[0]) ? 1 : 0
+        const bSel = selectedSet.has(b[0]) ? 1 : 0
+        if (aSel !== bSel) return bSel - aSel
+        return b[1].count - a[1].count || a[1].label.localeCompare(b[1].label, 'zh-Hans-CN')
+      })
+      .slice(0, 36)
+      .map(([, val]) => val)
+  }, [mergedPool.cards, category, selectedSourceIds, selectedTags, tagQuery])
+
+  const filtered = useMemo(() => {
+    const keyword = query.trim().toLocaleLowerCase()
+    const selectedTagLowers = selectedTags.map((t) => t.toLocaleLowerCase())
+    return mergedPool.cards
       .filter((card) => category === 'all' || card.kind === category)
+      .filter(
+        (card) => selectedSourceIds.length === 0 || selectedSourceIds.includes(card.pluginId)
+      )
+      .filter(
+        (card) =>
+          selectedTagLowers.length === 0 ||
+          selectedTagLowers.every((tagLower) =>
+            card.tags.some((ct) => ct.trim().toLocaleLowerCase() === tagLower)
+          )
+      )
       .filter((card) => !onlyInstalled || installedKeys.has(cardKey(card)))
       .filter((card) => {
-        if (useRemote && REMOTE_SEARCH_PLUGIN_IDS.has(card.pluginId) && remoteResults!.some((r) => cardKey(r) === cardKey(card))) {
+        if (keyword === '') return true
+        if (
+          mergedPool.useRemote &&
+          REMOTE_SEARCH_PLUGIN_IDS.has(card.pluginId) &&
+          mergedPool.remoteKeySet?.has(cardKey(card))
+        ) {
           return true
         }
-        return keyword === ''
-          ? true
-          : [card.name, card.description, card.creator, card.pluginName, ...card.tags]
-              .join(' ')
-              .toLocaleLowerCase()
-              .includes(keyword)
+        return [card.name, card.description, card.creator, card.pluginName, ...card.tags]
+          .join(' ')
+          .toLocaleLowerCase()
+          .includes(keyword)
       })
       .sort(
         (a, b) =>
           KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
           a.name.localeCompare(b.name, 'zh-Hans-CN')
       )
-  }, [catalog.cards, category, installedKeys, onlyInstalled, query, remoteResults])
+  }, [
+    mergedPool,
+    category,
+    selectedSourceIds,
+    selectedTags,
+    installedKeys,
+    onlyInstalled,
+    query,
+  ])
+
+  const toggleSourceFilter = (sourceId: string) => {
+    setSelectedSourceIds((prev) =>
+      prev.includes(sourceId) ? prev.filter((id) => id !== sourceId) : [...prev, sourceId]
+    )
+  }
+
+  const toggleTagFilter = (tagLabel: string) => {
+    const lower = tagLabel.toLocaleLowerCase()
+    setSelectedTags((prev) =>
+      prev.some((t) => t.toLocaleLowerCase() === lower)
+        ? prev.filter((t) => t.toLocaleLowerCase() !== lower)
+        : [...prev, tagLabel]
+    )
+  }
+
+  const hasActiveFilters =
+    selectedSourceIds.length > 0 || selectedTags.length > 0 || onlyInstalled
+
+  const clearAllFilters = () => {
+    setSelectedSourceIds([])
+    setSelectedTags([])
+    setOnlyInstalled(false)
+    setTagQuery('')
+  }
 
   const failedSources = catalog.sources.filter((source) => source.error)
   const sourceMap = useMemo(
@@ -383,8 +515,11 @@ export const MarketModal = () => {
   const handleLogout = async (plugin: MarketPluginView) => {
     try {
       await marketLogout(plugin.id, settings.customGatewayOrigin)
+      invalidateMarketCache(plugin.id)
       setAuthStatus((current) => ({ ...current, [plugin.id]: { loggedIn: false } }))
-      showToast(`已退出 ${plugin.name}`, 'success')
+      setSelectedSourceIds((prev) => prev.filter((id) => id !== plugin.id))
+      await refreshCatalog()
+      showToast(`已退出 ${plugin.name}，相关目录已隐藏`, 'success')
     } catch (err) {
       showToast(errorMessage(err), 'error')
     }
@@ -398,15 +533,29 @@ export const MarketModal = () => {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索角色、世界书、规则或作者…"
+            placeholder={
+              selectedSourceIds.length > 0 || selectedTags.length > 0
+                ? '在已选筛选条件内继续搜索…'
+                : '搜索角色、世界书、规则、标签或作者…'
+            }
           />
+          {query ? (
+            <button
+              type="button"
+              className={styles.searchClearBtn}
+              aria-label="清除搜索关键词"
+              onClick={() => setQuery('')}
+            >
+              <IconClose size={12} />
+            </button>
+          ) : null}
         </label>
         <button
           type="button"
           className={styles.sourcesBtn}
           onClick={() => setView('sources')}
-          title="来源管理 · 添加开源社区或自定义卡牌清单"
-          aria-label="来源管理 · 添加来源"
+          title="添加来源"
+          aria-label="添加来源"
         >
           <IconGlobe size={15} />
           <span className={styles.sourcesLabel}>添加来源</span>
@@ -414,26 +563,196 @@ export const MarketModal = () => {
       </div>
 
       <div className={styles.filterRow}>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={onlyInstalled}
-          className={clsx(styles.toggle, onlyInstalled && styles.toggleOn)}
-          onClick={() => setOnlyInstalled((current) => !current)}
-        >
-          <span className={styles.switch}>
-            <span className={styles.knob} />
-          </span>
-          仅显示已下载
-        </button>
-        <button
-          type="button"
-          className={styles.sourceTipBtn}
-          onClick={() => setView('sources')}
-        >
-          管理内置源 / 添加自定义源 →
-        </button>
+        <div className={styles.filterPills}>
+          <button
+            type="button"
+            className={clsx(
+              styles.facetBtn,
+              (filterPanel === 'source' || selectedSourceIds.length > 0) && styles.facetBtnActive
+            )}
+            onClick={() => setFilterPanel((cur) => (cur === 'source' ? null : 'source'))}
+          >
+            <IconSliders size={12} />
+            <span>
+              {selectedSourceIds.length > 0 ? `来源 · ${selectedSourceIds.length}` : '来源'}
+            </span>
+            <IconChevronDown size={12} />
+          </button>
+
+          <button
+            type="button"
+            className={clsx(
+              styles.facetBtn,
+              (filterPanel === 'tag' || selectedTags.length > 0) && styles.facetBtnActive
+            )}
+            onClick={() => setFilterPanel((cur) => (cur === 'tag' ? null : 'tag'))}
+          >
+            <span>
+              {selectedTags.length > 0 ? `标签 · ${selectedTags.length}` : '标签'}
+            </span>
+            <IconChevronDown size={12} />
+          </button>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={onlyInstalled}
+            className={clsx(styles.facetBtn, onlyInstalled && styles.facetBtnActive)}
+            onClick={() => setOnlyInstalled((current) => !current)}
+          >
+            <span>仅已下载</span>
+          </button>
+        </div>
+
+        <div className={styles.filterMeta}>
+          <span className={styles.filterCount}>{filtered.length} 个结果</span>
+          {hasActiveFilters ? (
+            <button type="button" className={styles.resetFilterBtn} onClick={clearAllFilters}>
+              重置
+            </button>
+          ) : null}
+        </div>
       </div>
+
+      {filterPanel ? (
+        <div className={styles.filterDrawer}>
+          {filterPanel === 'source' ? (
+            <div className={styles.drawerSection}>
+              <div className={styles.drawerHeader}>
+                <span>按来源筛选（可多选，与搜索框叠加生效）</span>
+                {selectedSourceIds.length > 0 ? (
+                  <button
+                    type="button"
+                    className={styles.linkBtn}
+                    onClick={() => setSelectedSourceIds([])}
+                  >
+                    全部来源
+                  </button>
+                ) : null}
+              </div>
+              <div className={styles.chipCloud}>
+                <button
+                  type="button"
+                  className={clsx(
+                    styles.filterChip,
+                    selectedSourceIds.length === 0 && styles.filterChipOn
+                  )}
+                  onClick={() => setSelectedSourceIds([])}
+                >
+                  全部来源
+                </button>
+                {sourceOptions.map((src) => {
+                  const active = selectedSourceIds.includes(src.id)
+                  return (
+                    <button
+                      key={src.id}
+                      type="button"
+                      className={clsx(styles.filterChip, active && styles.filterChipOn)}
+                      onClick={() => toggleSourceFilter(src.id)}
+                    >
+                      <span>{src.name}</span>
+                      <span className={styles.chipCount}>{src.count}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className={styles.drawerSection}>
+              <div className={styles.drawerHeader}>
+                <span>按标签筛选（交集叠加，先选条件再搜更精准）</span>
+                {selectedTags.length > 0 ? (
+                  <button
+                    type="button"
+                    className={styles.linkBtn}
+                    onClick={() => setSelectedTags([])}
+                  >
+                    清空标签
+                  </button>
+                ) : null}
+              </div>
+              <input
+                className={styles.tagMiniInput}
+                placeholder="快速找标签（如 Anime / Chinese / Fantasy / RPG）…"
+                value={tagQuery}
+                onChange={(e) => setTagQuery(e.target.value)}
+              />
+              <div className={styles.chipCloud}>
+                {tagOptions.length === 0 ? (
+                  <span className={styles.emptyTagHint}>暂无匹配标签</span>
+                ) : (
+                  tagOptions.map((opt) => {
+                    const active = selectedTags.some(
+                      (t) => t.toLocaleLowerCase() === opt.label.toLocaleLowerCase()
+                    )
+                    return (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        className={clsx(styles.filterChip, active && styles.filterChipOn)}
+                        onClick={() => toggleTagFilter(opt.label)}
+                      >
+                        <span>{opt.label}</span>
+                        <span className={styles.chipCount}>{opt.count}</span>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className={styles.drawerFooter}>
+            <button
+              type="button"
+              className={styles.drawerSecondaryBtn}
+              onClick={clearAllFilters}
+            >
+              清空已选
+            </button>
+            <button
+              type="button"
+              className={styles.drawerPrimaryBtn}
+              onClick={() => setFilterPanel(null)}
+            >
+              确认（查看 {filtered.length} 张）
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {selectedSourceIds.length > 0 || selectedTags.length > 0 ? (
+        <div className={styles.activeStrip}>
+          {selectedSourceIds.map((srcId) => {
+            const label =
+              sourceOptions.find((s) => s.id === srcId)?.name ??
+              sourceMap.get(srcId)?.name ??
+              srcId
+            return (
+              <button
+                key={srcId}
+                type="button"
+                className={styles.selectedPill}
+                onClick={() => toggleSourceFilter(srcId)}
+              >
+                <span>来源：{label}</span>
+                <IconClose size={10} />
+              </button>
+            )
+          })}
+          {selectedTags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              className={styles.selectedPill}
+              onClick={() => toggleTagFilter(tag)}
+            >
+              <span>#{tag}</span>
+              <IconClose size={10} />
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className={styles.tabs}>
         {CATEGORY_TABS.map((tab) => (
@@ -518,9 +837,25 @@ export const MarketModal = () => {
                 <p className={styles.cardDescription}>{card.description || '来源没有提供简介。'}</p>
                 {card.tags.length > 0 ? (
                   <div className={styles.tags}>
-                    {card.tags.slice(0, 5).map((tag) => (
-                      <span key={tag}>{tag}</span>
-                    ))}
+                    {card.tags.slice(0, 5).map((tag) => {
+                      const tagSelected = selectedTags.some(
+                        (t) => t.toLocaleLowerCase() === tag.toLocaleLowerCase()
+                      )
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          title="点击按此标签筛选"
+                          className={clsx(styles.cardTagBtn, tagSelected && styles.cardTagBtnOn)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            toggleTagFilter(tag)
+                          }}
+                        >
+                          {tag}
+                        </button>
+                      )
+                    })}
                   </div>
                 ) : null}
                 <div className={styles.cardFooter}>
@@ -630,7 +965,7 @@ export const MarketModal = () => {
       <div className={styles.sourceGuideBanner}>
         <IconGlobe size={14} />
         <span>
-          可粘贴自定义清单 JSON 地址（HTTPS，如 GitHub Raw / 镜像地址）订阅更多开源卡包；内置源已包含像素酒馆、Chub.ai（SFW 精选）等。
+          可粘贴自定义清单 JSON 地址（HTTPS，如 GitHub Raw / 镜像地址）订阅更多开源卡包；内置免登录精选源已包含 Chub.ai 开源社区与 Bae · ppl.studio，需账号的来源登录后才会展示在市场中。
         </span>
       </div>
 
@@ -753,6 +1088,7 @@ export const MarketModal = () => {
         }}
         onLoggedIn={(status) => {
           if (!authPlugin) return
+          invalidateMarketCache(authPlugin.id)
           setAuthStatus((current) => ({ ...current, [authPlugin.id]: status }))
           showToast(`已登录 ${authPlugin.name}`, 'success')
           const card = pendingCard

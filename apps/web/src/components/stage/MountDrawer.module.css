@@ -763,6 +763,12 @@
   border-color: var(--accent);
 }
 
+.modeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
 .modeGroup {
   display: flex;
   gap: 6px;
@@ -770,12 +776,13 @@
 
 .modeBtn {
   flex: 1;
-  height: 28px;
+  height: 29px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-default);
   background: var(--bg-base);
   font-size: 12px;
   color: var(--text-secondary);
+  cursor: pointer;
 }
 
 .modeBtnActive {
@@ -783,6 +790,210 @@
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
+}
+
+.advancedBtn {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.advancedBtn:hover,
+.advancedBtnActive {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.groupHintLine {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-tertiary);
+}
+
+.rosterList {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.rosterItem {
+  padding: 6px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.rosterItemMuted {
+  opacity: 0.58;
+}
+
+.rosterMain {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.rosterArrows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.rosterArrowBtn {
+  width: 16px;
+  height: 13px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.rosterArrowBtn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.rosterArrowBtn:disabled {
+  opacity: 0.28;
+  cursor: default;
+}
+
+.rosterAvatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.rosterName {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.muteChip {
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10.5px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.muteChipOn {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.talkRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.talkLabel,
+.talkVal {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.talkVal {
+  width: 30px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.talkSlider {
+  flex: 1;
+  accent-color: var(--accent);
+  height: 4px;
+}
+
+.groupAdvBox {
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.advField {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.advLabel {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.advInput {
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.advSwitchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.advSwitchTitle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
 }
 
 .footer {

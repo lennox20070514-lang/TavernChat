@@ -76,6 +76,7 @@ jobs:
         env:
           TAVERN_VERSION_NAME: ${{ steps.meta.outputs.version }}
           TAVERN_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          TAVERN_UPDATE_MANIFEST_URL: ${{ vars.TAVERN_UPDATE_MANIFEST_URL }}
           TAVERN_UPDATE_MIRROR_URL: ${{ vars.TAVERN_UPDATE_MIRROR_URL }}
         run: corepack pnpm apk:sync
 

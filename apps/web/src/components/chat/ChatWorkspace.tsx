@@ -1,6 +1,10 @@
 import clsx from 'clsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CharacterComponent, ChatMessage } from '@tavern-chat/core'
+import {
+  resolveGroupChatConfig,
+  type CharacterComponent,
+  type ChatMessage,
+} from '@tavern-chat/core'
 import { getActiveProvider, useSettings } from '../../services/settings.ts'
 import {
   getMessageSiblings,
@@ -36,12 +40,15 @@ export const ChatWorkspace = () => {
   const components = useAppStore((s) => s.components)
   const messagesBySession = useAppStore((s) => s.messagesBySession)
   const streamingBySession = useAppStore((s) => s.streamingBySession)
+  const activeGroupRoundBySession = useAppStore((s) => s.activeGroupRoundBySession)
   const compactingBySession = useAppStore((s) => s.compactingBySession)
 
   const sendMessage = useAppStore((s) => s.sendMessage)
+  const triggerGroupRound = useAppStore((s) => s.triggerGroupRound)
   const stopStreaming = useAppStore((s) => s.stopStreaming)
   const regenerateMessage = useAppStore((s) => s.regenerateMessage)
   const continueLastMessage = useAppStore((s) => s.continueLastMessage)
+  const updateGroupConfig = useAppStore((s) => s.updateGroupConfig)
   const editMessage = useAppStore((s) => s.editMessage)
   const deleteMessage = useAppStore((s) => s.deleteMessage)
   const switchMessageBranch = useAppStore((s) => s.switchMessageBranch)
@@ -64,9 +71,9 @@ export const ChatWorkspace = () => {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingText, setEditingText] = useState('')
   const [modelPopOpen, setModelPopOpen] = useState(false)
-  const [speakerId, setSpeakerId] = useState<string>('')
   const [dragging, setDragging] = useState(false)
   const [searchMatchCursor, setSearchMatchCursor] = useState(0)
+  const [autoCountdown, setAutoCountdown] = useState<number | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -85,17 +92,37 @@ export const ChatWorkspace = () => {
   )
 
   const streaming = activeSessionId ? Boolean(streamingBySession[activeSessionId]) : false
+  const groupRoundActive = activeSessionId
+    ? Boolean(activeGroupRoundBySession[activeSessionId])
+    : false
+  const isBusy = streaming || groupRoundActive
   const compacting = activeSessionId ? compactingBySession[activeSessionId] : undefined
 
   const activeChars = useMemo(() => {
     if (!session) return []
     const map = new Map(components.map((c) => [c.id, c]))
     return session.mounts
-      .filter((m) => m.enabled && m.kind === 'character')
+      .filter((m) => m.enabled && m.kind === 'character' && m.componentId !== session.userCharacterId)
       .sort((a, b) => a.order - b.order)
       .map((m) => map.get(m.componentId))
       .filter((c): c is CharacterComponent => Boolean(c && c.kind === 'character'))
   }, [session, components])
+
+  const charMountMap = useMemo(
+    () => new Map((session?.mounts ?? []).map((m) => [m.componentId, m])),
+    [session?.mounts]
+  )
+  const groupCfg = useMemo(
+    () => (session ? resolveGroupChatConfig(session) : undefined),
+    [session]
+  )
+  const visibleGroupChars = useMemo(
+    () =>
+      groupCfg?.hideMuted
+        ? activeChars.filter((c) => !charMountMap.get(c.id)?.muted)
+        : activeChars,
+    [activeChars, charMountMap, groupCfg?.hideMuted]
+  )
 
   const povCharacter = useMemo(() => {
     if (!session?.userCharacterId) return undefined
@@ -106,9 +133,49 @@ export const ChatWorkspace = () => {
   }, [session?.userCharacterId, components])
 
   const tokenEstimate = useMemo(() => {
-    const assembled = previewCurrentPrompt(speakerId || undefined)
+    const assembled = previewCurrentPrompt(activeChars[0]?.id)
     return assembled?.totalTokens ?? 0
-  }, [previewCurrentPrompt, speakerId, session, activePath, components])
+  }, [previewCurrentPrompt, activeChars, session, activePath, components])
+
+  const canAutoContinue = Boolean(
+    session &&
+      activeChars.length >= 2 &&
+      groupCfg?.autoMode &&
+      !isBusy &&
+      !compacting &&
+      activePath.length > 0 &&
+      !draft.trim() &&
+      session.multiCharMode !== 'manual' &&
+      session.multiCharMode !== 'narrator' &&
+      activeChars.some((c) => !charMountMap.get(c.id)?.muted)
+  )
+
+  useEffect(() => {
+    if (!canAutoContinue || !groupCfg) {
+      setAutoCountdown(null)
+      return
+    }
+    const totalSec = Math.max(2, groupCfg.autoModeDelaySec || 4)
+    setAutoCountdown(totalSec)
+    const timer = window.setInterval(() => {
+      setAutoCountdown((prev) => {
+        if (prev === null) return null
+        if (prev <= 1) {
+          window.clearInterval(timer)
+          void triggerGroupRound({ isAutoContinuation: true })
+          return null
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [
+    canAutoContinue,
+    groupCfg?.autoModeDelaySec,
+    activePath.length,
+    session?.id,
+    triggerGroupRound,
+  ])
 
   const normalizedQuery = chatSearchOpen ? searchQuery.trim().toLowerCase() : ''
   const matchedMessageIds = useMemo(() => {
@@ -184,17 +251,15 @@ export const ChatWorkspace = () => {
   }, [draft])
 
   const handleSend = () => {
-    if (streaming) {
+    if (isBusy) {
       stopStreaming()
       return
     }
     const text = draft.trim()
-    // 允许空白输入时若已有角色也直接驱动角色继续发言
+    // 允许空白输入时若已有消息也直接驱动下一轮互动
     if (!text && activePath.length === 0) return
     setDraft('')
-    void sendMessage(text, {
-      nextSpeakerId: activeChars.length > 1 && speakerId ? speakerId : undefined,
-    })
+    void sendMessage(text)
   }
 
   const handleCopy = async (content: string) => {
@@ -220,15 +285,35 @@ export const ChatWorkspace = () => {
         }}
         className={clsx(styles.msgRow, isUser && styles.msgRowUser, isActiveMatch && styles.msgRowHit)}
       >
-        {!isUser ? (
-          msg.speakerAvatar ? (
-            <img className={styles.msgAvatar} src={msg.speakerAvatar} alt="" />
+        {!isUser ? (() => {
+          const matchedChar =
+            (msg.speakerId
+              ? components.find((c) => c.id === msg.speakerId && c.kind === 'character')
+              : undefined) ??
+            (msg.speakerName
+              ? components.find((c) => c.kind === 'character' && c.name === msg.speakerName)
+              : undefined) ??
+            (activeChars.length === 1 ? activeChars[0] : undefined)
+          const avatarSrc = matchedChar?.avatar || msg.speakerAvatar
+          const avatarLabel = (matchedChar?.name || msg.speakerName || 'A').slice(0, 1)
+          const avatarNode = avatarSrc ? (
+            <img className={styles.msgAvatar} src={avatarSrc} alt="" />
           ) : (
-            <div className={styles.msgAvatar}>
-              {(msg.speakerName || 'A').slice(0, 1)}
-            </div>
+            <div className={styles.msgAvatar}>{avatarLabel}</div>
           )
-        ) : null}
+          return matchedChar ? (
+            <button
+              type="button"
+              className={styles.msgAvatarBtn}
+              title={`查看「${matchedChar.name}」设定详情`}
+              onClick={() => openLibrary('character', matchedChar.id)}
+            >
+              {avatarNode}
+            </button>
+          ) : (
+            avatarNode
+          )
+        })() : null}
 
         <div className={clsx(styles.msgBody, isUser && styles.msgBodyUser)}>
           {!isUser ? (
@@ -355,12 +440,7 @@ export const ChatWorkspace = () => {
                   type="button"
                   className={styles.miniBtn}
                   title="重新生成（新增版本分支）"
-                  onClick={() =>
-                    void regenerateMessage(
-                      msg.id,
-                      activeChars.length > 1 && speakerId ? speakerId : undefined
-                    )
-                  }
+                  onClick={() => void regenerateMessage(msg.id)}
                 >
                   <IconRefresh size={13} />
                 </button>
@@ -556,18 +636,113 @@ export const ChatWorkspace = () => {
       </div>
 
       <div className={styles.composerOuter}>
+        {activeChars.length >= 2 && session ? (
+          <div className={styles.groupBar} aria-label="群聊在场角色点名栏">
+            <div className={styles.groupBarScroll}>
+              {session.multiCharMode !== 'narrator' ? (
+                <button
+                  type="button"
+                  className={styles.groupRoundBtn}
+                  disabled={isBusy || Boolean(compacting) || (activePath.length === 0 && !draft.trim())}
+                  title={
+                    draft.trim()
+                      ? `发送消息并按「随机/设定顺序」让在场角色接力回复`
+                      : '让在场角色接着刚才的话继续互聊/斗嘴'
+                  }
+                  onClick={() => {
+                    const text = draft.trim()
+                    if (text) {
+                      setDraft('')
+                      void sendMessage(text)
+                    } else {
+                      void triggerGroupRound({ isAutoContinuation: true })
+                    }
+                  }}
+                >
+                  {isBusy ? '演绎中…' : '全员接力'}
+                </button>
+              ) : null}
+
+              {visibleGroupChars.map((char) => {
+                const isMuted = Boolean(charMountMap.get(char.id)?.muted)
+                return (
+                  <button
+                    key={char.id}
+                    type="button"
+                    disabled={isBusy || Boolean(compacting)}
+                    className={clsx(styles.groupMemberChip, isMuted && styles.groupMemberMuted)}
+                    title={
+                      draft.trim()
+                        ? `发送输入并点名「${char.name}」回应`
+                        : `点名让「${char.name}」说一句`
+                    }
+                    onClick={() => {
+                      const text = draft.trim()
+                      if (text) {
+                        setDraft('')
+                        void sendMessage(text, { nextSpeakerId: char.id })
+                      } else {
+                        void triggerGroupRound({ speakerId: char.id })
+                      }
+                    }}
+                  >
+                    {char.avatar ? (
+                      <img className={styles.groupMemberAvatar} src={char.avatar} alt="" />
+                    ) : (
+                      <span className={styles.groupMemberAvatar}>{char.name.slice(0, 1)}</span>
+                    )}
+                    <span className={styles.groupMemberName}>{char.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            {session.multiCharMode !== 'manual' && session.multiCharMode !== 'narrator' ? (
+              <button
+                type="button"
+                className={clsx(
+                  styles.autoModeBtn,
+                  groupCfg?.autoMode && styles.autoModeBtnOn
+                )}
+                title="开启后角色会自动互相接话推进剧情，一旦你在下方打字立刻暂停"
+                onClick={() =>
+                  void updateGroupConfig({ autoMode: !groupCfg?.autoMode })
+                }
+              >
+                <span className={styles.autoDot} />
+                <span>
+                  {groupCfg?.autoMode
+                    ? autoCountdown !== null
+                      ? `续聊 ${autoCountdown}s`
+                      : '自动中'
+                    : '自动续聊'}
+                </span>
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className={styles.composerCard}>
           <textarea
             ref={inputRef}
             className={styles.input}
             rows={1}
             placeholder={
-              activeChars.length > 0
-                ? `向 ${activeChars.map((c) => c.name).join('、')} 发送消息…（Enter 发送，Shift+Enter 换行）`
-                : '输入消息开始对话…（可随时点击右上角「组件」展开右侧栏）'
+              activeChars.length >= 2
+                ? `向群聊（${activeChars.map((c) => c.name).join('、')}）发言，或直接点上方角色头像让 TA 插嘴…`
+                : activeChars.length > 0
+                  ? `向 ${activeChars[0]!.name} 发送消息…（Enter 发送，Shift+Enter 换行）`
+                  : '输入消息开始对话…（可随时点击右上角「组件」展开右侧栏）'
             }
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              const val = e.target.value
+              setDraft(val)
+              if (val.trim() && groupCfg?.autoMode) {
+                void updateGroupConfig({ autoMode: false })
+                showToast('检测到输入，已自动暂停自动续聊', 'info')
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault()
@@ -662,32 +837,16 @@ export const ChatWorkspace = () => {
                   {compacting.total > 1 ? ` ${compacting.chunk}/${compacting.total}` : '…'}
                 </span>
               ) : null}
-
-              {activeChars.length > 1 ? (
-                <select
-                  className={styles.toolChip}
-                  value={speakerId}
-                  onChange={(e) => setSpeakerId(e.target.value)}
-                  title="指定本轮由哪位角色回应"
-                >
-                  <option value="">自动安排发言</option>
-                  {activeChars.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      点名：{c.name}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
             </div>
 
             <button
               type="button"
-              className={clsx(styles.sendBtn, streaming && styles.stopBtn)}
-              disabled={Boolean(compacting) || (!streaming && !draft.trim() && activePath.length === 0)}
+              className={clsx(styles.sendBtn, isBusy && styles.stopBtn)}
+              disabled={Boolean(compacting) || (!isBusy && !draft.trim() && activePath.length === 0)}
               onClick={handleSend}
-              aria-label={streaming ? '停止生成' : '发送'}
+              aria-label={isBusy ? '停止生成' : '发送'}
             >
-              {streaming ? <IconStop size={15} /> : <IconSend size={16} />}
+              {isBusy ? <IconStop size={15} /> : <IconSend size={16} />}
             </button>
           </div>
         </div>

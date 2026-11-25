@@ -5,6 +5,7 @@ import {
   normalizeChubLorebookPayload,
   normalizeChubPresetPayload,
   parseMarketManifest,
+  readCharacterJsonFromPng,
   type MarketAuthConfig,
   type MarketCard,
   type MarketManifest,
@@ -12,6 +13,7 @@ import {
   type MarketResourceKind,
 } from '@tavern-chat/core'
 import { resolveGatewayOrigin } from './llm/client.ts'
+import { getMarketAuthStatus } from './marketAuth.ts'
 
 export type MarketPluginView = {
   id: string
@@ -70,6 +72,36 @@ type FetchMode = 'text' | 'bytes'
 
 const manifestCache = new Map<string, { expiresAt: number; manifest: MarketManifest }>()
 const cardsCache = new Map<string, { expiresAt: number; cards: MarketCard[] }>()
+
+async function runWithConcurrency<T>(
+  tasks: Array<() => Promise<T>>,
+  concurrency = 2
+): Promise<Array<PromiseSettledResult<T>>> {
+  const results: Array<PromiseSettledResult<T>> = new Array(tasks.length)
+  let nextIdx = 0
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
+    while (nextIdx < tasks.length) {
+      const idx = nextIdx
+      nextIdx += 1
+      try {
+        results[idx] = { status: 'fulfilled', value: await tasks[idx]!() }
+      } catch (reason) {
+        results[idx] = { status: 'rejected', reason }
+      }
+    }
+  })
+  await Promise.all(workers)
+  return results
+}
+
+export function invalidateMarketCache(pluginId?: string): void {
+  if (pluginId) {
+    cardsCache.delete(pluginId)
+  } else {
+    cardsCache.clear()
+  }
+  pixelSearchCache.clear()
+}
 
 const friendlyError = (err: unknown): string => {
   const message = err instanceof Error ? err.message : String(err)
@@ -302,52 +334,6 @@ const parseBae = (plugin: MarketplacePlugin, html: string): MarketCard[] => {
       tags: [],
       license: plugin.license,
       licenseUrl: plugin.homepage,
-    })
-  }
-  return cards.filter(
-    (card) => !isBlockedMarketContent(card.name, card.description, card.tags.join(' '))
-  )
-}
-
-const parseTuniang = (plugin: MarketplacePlugin, html: string): MarketCard[] => {
-  const doc = parseHtml(html)
-  const cards: MarketCard[] = []
-  const seen = new Set<string>()
-
-  for (const block of Array.from(doc.querySelectorAll('.cc'))) {
-    const link =
-      block.querySelector<HTMLAnchorElement>('.cc-dl a[href$=".json"]') ??
-      block.querySelector<HTMLAnchorElement>('a[href$=".png"]')
-    const href = link?.getAttribute('href')
-    if (!link || !href) continue
-    const downloadUrl = absoluteUrl(href, plugin.catalogUrl)
-    if (seen.has(downloadUrl)) continue
-    seen.add(downloadUrl)
-
-    const name = nodeText(block.querySelector('h3'))
-    if (!name) continue
-    const cover = block.querySelector<HTMLImageElement>('img.cc-img, img')
-    const fileName = downloadUrl.split('/').pop() || 'card.json'
-    const credit = nodeText(block.querySelector('.cc-by'))
-    const creator = credit.match(/CC BY 4\.0\s*[·•]\s*([^(]+)/)?.[1]?.trim() || plugin.author
-
-    cards.push({
-      id: plugin.id + ':' + fileName.replace(/\.(png|json)$/i, ''),
-      pluginId: plugin.id,
-      pluginName: plugin.name,
-      name,
-      description: nodeText(block.querySelector('.cc-teaser')),
-      creator,
-      kind: 'character',
-      sourceUrl: plugin.catalogUrl,
-      downloadUrl,
-      coverUrl: cover?.getAttribute('src')
-        ? absoluteUrl(cover.getAttribute('src') ?? '', plugin.catalogUrl)
-        : undefined,
-      fileName,
-      tags: Array.from(block.querySelectorAll('.cc-tags span')).map(nodeText).filter(Boolean),
-      license: plugin.license,
-      licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
     })
   }
   return cards.filter(
@@ -691,16 +677,12 @@ const buildChubRequests = (
       url: `${CHUB_API_BASE}/search?first=24&page=${page}&sort=star_count&nsfw=false&namespace=characters&topics=SFW&min_tokens=150`,
     },
     {
-      kind: 'character',
-      url: `${CHUB_API_BASE}/search?first=12&page=${page}&sort=created_at&nsfw=false&namespace=characters&topics=SFW&min_tokens=150`,
-    },
-    {
       kind: 'world',
       url: `${CHUB_API_BASE}/search?first=12&page=${page}&sort=star_count&nsfw=false&namespace=lorebooks&min_tokens=150`,
     },
     {
       kind: 'rule',
-      url: `${CHUB_API_BASE}/search?first=10&page=${page}&sort=star_count&nsfw=false&namespace=presets`,
+      url: `${CHUB_API_BASE}/search?first=12&page=${page}&sort=star_count&nsfw=false&namespace=presets`,
     },
   ]
 }
@@ -711,8 +693,9 @@ const loadChubCards = async (
   page = 1
 ): Promise<MarketCard[]> => {
   const requests = buildChubRequests(plugin.id, page)
-  const settled = await Promise.allSettled(
-    requests.map((item) => requestText(item.url, false, customOrigin))
+  const settled = await runWithConcurrency(
+    requests.map((item) => () => requestText(item.url, false, customOrigin)),
+    2
   )
   const cards: MarketCard[] = []
   const seen = new Set<string>()
@@ -740,8 +723,9 @@ export async function loadMoreMarketCards(
   customOrigin?: string
 ): Promise<MarketCard[]> {
   const chubPlugins = BUILTIN_MARKET_PLUGINS.filter((p) => CHUB_PLUGIN_IDS.has(p.id))
-  const settled = await Promise.allSettled(
-    chubPlugins.map((plugin) => loadChubCards(plugin, customOrigin, page))
+  const settled = await runWithConcurrency(
+    chubPlugins.map((plugin) => () => loadChubCards(plugin, customOrigin, page)),
+    2
   )
   const cards: MarketCard[] = []
   const seen = new Set<string>()
@@ -776,8 +760,9 @@ const searchChubCards = async (
       url: `${CHUB_API_BASE}/search?first=6&page=1&sort=star_count&nsfw=false&namespace=presets&search=${q}`,
     },
   ]
-  const settled = await Promise.allSettled(
-    requests.map((item) => requestText(item.url, false, customOrigin))
+  const settled = await runWithConcurrency(
+    requests.map((item) => () => requestText(item.url, false, customOrigin)),
+    2
   )
   const cards: MarketCard[] = []
   const seen = new Set<string>()
@@ -809,9 +794,14 @@ export async function searchMarketCards(
   const pixelPlugin = BUILTIN_MARKET_PLUGINS.find((entry) => entry.id === 'pixel-tavern')
   const chubPlugin = BUILTIN_MARKET_PLUGINS.find((entry) => entry.id === 'chub-ai')
   const gateway = await resolveGatewayOrigin(customOrigin)
+  const pixelLoggedIn = pixelPlugin
+    ? await getMarketAuthStatus(pixelPlugin.id, customOrigin)
+        .then((s) => s.loggedIn)
+        .catch(() => false)
+    : false
 
   const [pixelSettled, chubCardsSettled] = await Promise.allSettled([
-    pixelPlugin
+    pixelPlugin && pixelLoggedIn
       ? Promise.allSettled(
           [1, 2].map((page) =>
             requestText(
@@ -836,7 +826,6 @@ export async function searchMarketCards(
 
 const BUILTIN_PARSERS: Record<string, (plugin: MarketplacePlugin, html: string) => MarketCard[]> = {
   'bae-ppl-studio': parseBae,
-  'tuniang-foreverse': parseTuniang,
 }
 
 const readManifestUrls = (): string[] => {
@@ -941,6 +930,8 @@ export type MarketSourceStatus = {
   name: string
   builtin: boolean
   count: number
+  authRequired?: boolean
+  loggedIn?: boolean
   error?: string
 }
 
@@ -957,8 +948,8 @@ export async function loadMarketCatalog(
   const cards: MarketCard[] = []
   const sources: MarketSourceStatus[] = []
 
-  await Promise.all(
-    plugins.map(async (plugin) => {
+  await runWithConcurrency(
+    plugins.map((plugin) => async () => {
       if (plugin.error) {
         sources.push({
           id: plugin.id,
@@ -970,6 +961,23 @@ export async function loadMarketCatalog(
         onUpdate?.({ cards: [...cards], sources: [...sources] })
         return
       }
+      if (plugin.auth) {
+        const auth = await getMarketAuthStatus(plugin.id, customOrigin).catch(() => ({
+          loggedIn: false,
+        }))
+        if (!auth.loggedIn) {
+          sources.push({
+            id: plugin.id,
+            name: plugin.name,
+            builtin: plugin.builtin,
+            count: 0,
+            authRequired: true,
+            loggedIn: false,
+          })
+          onUpdate?.({ cards: [...cards], sources: [...sources] })
+          return
+        }
+      }
       try {
         const sourceCards = await loadMarketCards(plugin, customOrigin)
         cards.push(...sourceCards)
@@ -978,6 +986,7 @@ export async function loadMarketCatalog(
           name: plugin.name,
           builtin: plugin.builtin,
           count: sourceCards.length,
+          ...(plugin.auth ? { authRequired: true, loggedIn: true } : {}),
         })
       } catch (err) {
         sources.push({
@@ -989,7 +998,8 @@ export async function loadMarketCatalog(
         })
       }
       onUpdate?.({ cards: [...cards], sources: [...sources] })
-    })
+    }),
+    2
   )
 
   return { cards, sources }
@@ -1067,7 +1077,10 @@ export async function downloadMarketCard(
 
     try {
       const pngBytes = await requestBytes(card.downloadUrl, false, customOrigin)
-      if (looksLikePng(pngBytes)) return pngBytes
+      if (looksLikePng(pngBytes)) {
+        readCharacterJsonFromPng(pngBytes)
+        return pngBytes
+      }
     } catch {
       // 如果头像地址缺少内嵌 V2 PNG，自动回退读取 Chub 角色卡 API JSON
     }

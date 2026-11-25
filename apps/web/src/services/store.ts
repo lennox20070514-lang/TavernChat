@@ -3,10 +3,14 @@ import {
   BUILTIN_SELF_CHARACTER_ID,
   createBuiltinRulePresets,
   createBuiltinStarterCharacters,
+  DEFAULT_GROUP_CHAT_CONFIG,
+  draftGroupSpeakers,
   findActiveCheckpoint,
   planCompaction,
   resolveCompactionBudget,
+  resolveGroupChatConfig,
   smartImportFile,
+  stripLeadingSpeakerPrefix,
   substituteMacros,
   type AssembledPrompt,
   type CharacterComponent,
@@ -15,6 +19,7 @@ import {
   type ComponentItem,
   type ComponentKind,
   type ContextCheckpoint,
+  type GroupChatConfig,
   type MountedComponent,
   type MultiCharMode,
   type PersonaComponent,
@@ -123,6 +128,7 @@ type AppStoreState = {
   activeSessionId: string | null
   messagesBySession: Record<string, ChatMessage[]>
   streamingBySession: Record<string, { messageId: string; controller: AbortController }>
+  activeGroupRoundBySession: Record<string, boolean>
   compactingBySession: Record<string, { chunk: number; total: number }>
   toast: ToastMessage | null
 
@@ -165,7 +171,11 @@ type AppStoreState = {
   deleteComponent: (id: string) => Promise<void>
 
   // 会话 CRUD
-  createSession: (initialMounts?: MountedComponent[], title?: string) => Promise<ChatSession>
+  createSession: (
+    initialMounts?: MountedComponent[],
+    title?: string,
+    extra?: Partial<Pick<ChatSession, 'multiCharMode' | 'groupConfig'>>
+  ) => Promise<ChatSession>
   selectSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
   setSessionPinned: (id: string, pinned: boolean) => Promise<void>
@@ -179,12 +189,19 @@ type AppStoreState = {
   toggleWorldEntryOverride: (worldComponentId: string, entryId: string) => Promise<void>
   updateAuthorsNote: (note: string, depth?: number) => Promise<void>
   setMultiCharMode: (mode: MultiCharMode) => Promise<void>
+  updateGroupConfig: (patch: Partial<GroupChatConfig>) => Promise<void>
+  moveCharMountOrder: (componentId: string, delta: -1 | 1) => Promise<void>
+  updateCharMountMeta: (
+    componentId: string,
+    patch: Partial<Pick<MountedComponent, 'muted' | 'talkativeness'>>
+  ) => Promise<void>
   setUserCharacter: (characterId: string | null) => Promise<void>
   insertCharacterGreeting: (characterId: string, greetingIndex?: number) => Promise<void>
 
   // 对话发送 / 流式 / 分支操作
   previewCurrentPrompt: (nextSpeakerId?: string) => AssembledPrompt | null
   sendMessage: (text: string, options?: { nextSpeakerId?: string }) => Promise<void>
+  triggerGroupRound: (options?: { speakerId?: string; isAutoContinuation?: boolean }) => Promise<void>
   stopStreaming: (sessionId?: string) => void
   regenerateMessage: (messageId: string, nextSpeakerId?: string) => Promise<void>
   continueLastMessage: () => Promise<void>
@@ -199,6 +216,7 @@ type AppStoreState = {
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null
+const stoppedQueueSessions = new Set<string>()
 
 export const useAppStore = create<AppStoreState>((set, get) => ({
   ready: false,
@@ -207,6 +225,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   activeSessionId: null,
   messagesBySession: {},
   streamingBySession: {},
+  activeGroupRoundBySession: {},
   compactingBySession: {},
   toast: null,
 
@@ -341,7 +360,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         userCharacterId: defaultSelfId,
         authorsNote: '',
         authorsNoteDepth: 4,
-        multiCharMode: 'narrator',
+        multiCharMode: 'shuffled_round',
+        groupConfig: { ...DEFAULT_GROUP_CHAT_CONFIG },
         activeLeafId: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -349,14 +369,31 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       await storage.upsertSession(firstSession)
       sessions = [firstSession]
       activeSessionId = firstSession.id
-    } else if (addedSelfChar && defaultSelfId && sessions.length === 1 && !sessions[0]!.userCharacterId) {
-      const upgraded: ChatSession = {
-        ...sessions[0]!,
-        userCharacterId: defaultSelfId,
-        updatedAt: Date.now(),
+    } else {
+      const nextSessions: ChatSession[] = []
+      for (const s of sessions) {
+        let next = s
+        let changed = false
+        if (addedSelfChar && defaultSelfId && sessions.length === 1 && !next.userCharacterId) {
+          next = { ...next, userCharacterId: defaultSelfId }
+          changed = true
+        }
+        // 将旧版未配置 groupConfig 的默认 narrator 会话平滑升级为随机轮流（shuffled_round）
+        if (next.multiCharMode === 'narrator' && !next.groupConfig) {
+          next = {
+            ...next,
+            multiCharMode: 'shuffled_round',
+            groupConfig: { ...DEFAULT_GROUP_CHAT_CONFIG },
+          }
+          changed = true
+        }
+        if (changed) {
+          next = { ...next, updatedAt: Date.now() }
+          await storage.upsertSession(next)
+        }
+        nextSessions.push(next)
       }
-      await storage.upsertSession(upgraded)
-      sessions = [upgraded]
+      sessions = nextSessions
     }
 
     const messagesBySession: Record<string, ChatMessage[]> = {}
@@ -442,7 +479,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     }))
   },
 
-  createSession: async (initialMounts = [], title = '新对话') => {
+  createSession: async (initialMounts = [], title = '新对话', extra) => {
     const now = Date.now()
     const components = get().components
     const defaultSelfId =
@@ -455,7 +492,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       userCharacterId: defaultSelfId,
       authorsNote: '',
       authorsNoteDepth: 4,
-      multiCharMode: 'narrator',
+      multiCharMode: extra?.multiCharMode ?? 'shuffled_round',
+      groupConfig: extra?.groupConfig
+        ? { ...DEFAULT_GROUP_CHAT_CONFIG, ...extra.groupConfig }
+        : { ...DEFAULT_GROUP_CHAT_CONFIG },
       activeLeafId: null,
       createdAt: now,
       updatedAt: now,
@@ -691,7 +731,68 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const state = get()
     const session = state.sessions.find((s) => s.id === state.activeSessionId)
     if (!session) return
-    const updated: ChatSession = { ...session, multiCharMode, updatedAt: Date.now() }
+    const updated: ChatSession = {
+      ...session,
+      multiCharMode,
+      groupConfig: session.groupConfig ?? { ...DEFAULT_GROUP_CHAT_CONFIG },
+      updatedAt: Date.now(),
+    }
+    await storage.upsertSession(updated)
+    set((s) => ({
+      sessions: s.sessions.map((item) => (item.id === updated.id ? updated : item)),
+    }))
+  },
+
+  updateGroupConfig: async (patch) => {
+    const state = get()
+    const session = state.sessions.find((s) => s.id === state.activeSessionId)
+    if (!session) return
+    const updated: ChatSession = {
+      ...session,
+      groupConfig: { ...resolveGroupChatConfig(session), ...patch },
+      updatedAt: Date.now(),
+    }
+    await storage.upsertSession(updated)
+    set((s) => ({
+      sessions: s.sessions.map((item) => (item.id === updated.id ? updated : item)),
+    }))
+  },
+
+  moveCharMountOrder: async (componentId, delta) => {
+    const state = get()
+    const session = state.sessions.find((s) => s.id === state.activeSessionId)
+    if (!session) return
+    const sortedChars = session.mounts
+      .filter((m) => m.kind === 'character')
+      .sort((a, b) => a.order - b.order)
+    const idx = sortedChars.findIndex((m) => m.componentId === componentId)
+    const targetIdx = idx + delta
+    if (idx === -1 || targetIdx < 0 || targetIdx >= sortedChars.length) return
+    const reordered = [...sortedChars]
+    const [picked] = reordered.splice(idx, 1)
+    reordered.splice(targetIdx, 0, picked!)
+    const orderMap = new Map(reordered.map((m, i) => [m.componentId, i]))
+    const nextMounts = session.mounts.map((m) =>
+      m.kind === 'character' && orderMap.has(m.componentId)
+        ? { ...m, order: orderMap.get(m.componentId)! }
+        : m
+    )
+    const updated: ChatSession = { ...session, mounts: nextMounts, updatedAt: Date.now() }
+    await storage.upsertSession(updated)
+    set((s) => ({
+      sessions: s.sessions.map((item) => (item.id === updated.id ? updated : item)),
+    }))
+  },
+
+  updateCharMountMeta: async (componentId, patch) => {
+    const state = get()
+    const session = state.sessions.find((s) => s.id === state.activeSessionId)
+    if (!session) return
+    const updated: ChatSession = {
+      ...session,
+      mounts: session.mounts.map((m) => (m.componentId === componentId ? { ...m, ...patch } : m)),
+      updatedAt: Date.now(),
+    }
     await storage.upsertSession(updated)
     set((s) => ({
       sessions: s.sessions.map((item) => (item.id === updated.id ? updated : item)),
@@ -818,6 +919,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   stopStreaming: (sessionId) => {
     const targetId = sessionId ?? get().activeSessionId
     if (!targetId) return
+    stoppedQueueSessions.add(targetId)
     const active = get().streamingBySession[targetId]
     if (active) {
       active.controller.abort()
@@ -827,6 +929,18 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         return { streamingBySession: next }
       })
     }
+    const targetSession = get().sessions.find((s) => s.id === targetId)
+    if (targetSession?.groupConfig?.autoMode) {
+      const paused: ChatSession = {
+        ...targetSession,
+        groupConfig: { ...resolveGroupChatConfig(targetSession), autoMode: false },
+        updatedAt: Date.now(),
+      }
+      void storage.upsertSession(paused)
+      set((s) => ({
+        sessions: s.sessions.map((item) => (item.id === paused.id ? paused : item)),
+      }))
+    }
   },
 
   sendMessage: async (text, options) => {
@@ -834,7 +948,14 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const state = get()
     const session = state.sessions.find((s) => s.id === state.activeSessionId)
     if (!session) return
-    if (state.streamingBySession[session.id] || state.compactingBySession[session.id]) return
+    if (
+      state.streamingBySession[session.id] ||
+      state.activeGroupRoundBySession[session.id] ||
+      state.compactingBySession[session.id]
+    ) {
+      return
+    }
+    stoppedQueueSessions.delete(session.id)
 
     const existing = state.messagesBySession[session.id] ?? []
     let parentId = session.activeLeafId
@@ -879,9 +1000,27 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       messagesBySession: { ...s.messagesBySession, [session.id]: nextMsgs },
     }))
 
-    await generateAssistantReply(get, set, updatedSession.id, parentId, {
-      nextSpeakerId: options?.nextSpeakerId,
-      mode: 'normal',
+    await runGroupTurn(get, set, updatedSession.id, parentId, {
+      explicitSpeakerId: options?.nextSpeakerId,
+      isAutoContinuation: !trimmed,
+    })
+  },
+
+  triggerGroupRound: async (options) => {
+    const state = get()
+    const session = state.sessions.find((s) => s.id === state.activeSessionId)
+    if (!session) return
+    if (
+      state.streamingBySession[session.id] ||
+      state.activeGroupRoundBySession[session.id] ||
+      state.compactingBySession[session.id]
+    ) {
+      return
+    }
+    stoppedQueueSessions.delete(session.id)
+    await runGroupTurn(get, set, session.id, session.activeLeafId, {
+      explicitSpeakerId: options?.speakerId,
+      isAutoContinuation: options?.isAutoContinuation ?? true,
     })
   },
 
@@ -889,14 +1028,24 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const state = get()
     const session = state.sessions.find((s) => s.id === state.activeSessionId)
     if (!session) return
-    if (state.compactingBySession[session.id]) return
+    if (state.compactingBySession[session.id] || state.streamingBySession[session.id]) return
+    stoppedQueueSessions.delete(session.id)
     const allMsgs = state.messagesBySession[session.id] ?? []
     const target = allMsgs.find((m) => m.id === messageId)
     if (!target || target.role !== 'assistant') return
 
+    const activeChars = getOrderedActiveChars(session, state.components)
+    const targetSpeakerId = nextSpeakerId ?? target.speakerId
+    const speaker = targetSpeakerId
+      ? activeChars.find((c) => c.id === targetSpeakerId)
+      : session.multiCharMode === 'narrator' && activeChars.length > 1
+        ? undefined
+        : activeChars[0]
+
     // 在同一个 parentId 下生成新的兄弟回复分支（即酒馆 Swipe 机制！）
-    await generateAssistantReply(get, set, session.id, target.parentId, {
-      nextSpeakerId: nextSpeakerId ?? target.speakerId,
+    await generateSingleSpeakerReply(get, set, session.id, target.parentId, {
+      speaker,
+      isNarrator: session.multiCharMode === 'narrator' && activeChars.length > 1 && !speaker,
       mode: 'normal',
     })
   },
@@ -905,13 +1054,17 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const state = get()
     const session = state.sessions.find((s) => s.id === state.activeSessionId)
     if (!session) return
-    if (state.compactingBySession[session.id]) return
+    if (state.compactingBySession[session.id] || state.streamingBySession[session.id]) return
+    stoppedQueueSessions.delete(session.id)
     const allMsgs = state.messagesBySession[session.id] ?? []
     const path = resolveActivePath(allMsgs, session.activeLeafId)
     const last = path.at(-1)
     if (!last) return
-    await generateAssistantReply(get, set, session.id, last.id, {
-      nextSpeakerId: last.speakerId,
+    const activeChars = getOrderedActiveChars(session, state.components)
+    const speaker = last.speakerId ? activeChars.find((c) => c.id === last.speakerId) : undefined
+    await generateSingleSpeakerReply(get, set, session.id, last.id, {
+      speaker,
+      isNarrator: session.multiCharMode === 'narrator' && activeChars.length > 1 && !speaker,
       mode: 'continue',
     })
   },
@@ -990,7 +1143,12 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   importFiles: async (fileList) => {
     const files = Array.from(fileList)
     const summary: string[] = []
-    const pendingGroups: Array<{ name: string; memberNames: string[] }> = []
+    const pendingGroups: Array<{
+      name: string
+      memberNames: string[]
+      multiCharMode?: MultiCharMode
+      groupConfig?: Partial<GroupChatConfig>
+    }> = []
 
     for (const file of files) {
       try {
@@ -1015,7 +1173,12 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
           await get().upsertComponent(result.rule)
           summary.push(`规则预设「${result.rule.name}」`)
         } else if (result.kind === 'group') {
-          pendingGroups.push({ name: result.name, memberNames: result.memberNames })
+          pendingGroups.push({
+            name: result.name,
+            memberNames: result.memberNames,
+            multiCharMode: result.multiCharMode,
+            groupConfig: result.groupConfig,
+          })
         } else if (result.kind === 'chat_jsonl') {
           const now = Date.now()
           const importedSession: ChatSession = {
@@ -1024,7 +1187,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
             mounts: [],
             authorsNote: '',
             authorsNoteDepth: 4,
-            multiCharMode: 'narrator',
+            multiCharMode: 'shuffled_round',
+            groupConfig: { ...DEFAULT_GROUP_CHAT_CONFIG },
             activeLeafId: result.activeLeafId,
             createdAt: now,
             updatedAt: now,
@@ -1068,7 +1232,12 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         enabled: true,
         order: idx,
       }))
-      await get().createSession(mounts, grp.name)
+      await get().createSession(mounts, grp.name, {
+        multiCharMode: grp.multiCharMode,
+        groupConfig: grp.groupConfig
+          ? { ...DEFAULT_GROUP_CHAT_CONFIG, ...grp.groupConfig }
+          : undefined,
+      })
       summary.push(`多角色对话「${grp.name}」(已选入 ${matched.length} 位角色)`)
     }
 
@@ -1104,7 +1273,103 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 }))
 
-async function generateAssistantReply(
+function getOrderedActiveChars(
+  session: ChatSession,
+  components: ComponentItem[]
+): CharacterComponent[] {
+  const byId = new Map(components.map((c) => [c.id, c]))
+  return session.mounts
+    .filter((m) => m.enabled && m.kind === 'character' && m.componentId !== session.userCharacterId)
+    .sort((a, b) => a.order - b.order)
+    .map((m) => byId.get(m.componentId))
+    .filter((c): c is CharacterComponent => Boolean(c && c.kind === 'character'))
+}
+
+async function runGroupTurn(
+  get: () => AppStoreState,
+  set: (
+    partial:
+      | Partial<AppStoreState>
+      | ((state: AppStoreState) => Partial<AppStoreState>)
+  ) => void,
+  sessionId: string,
+  initialParentId: string | null,
+  options: { explicitSpeakerId?: string; isAutoContinuation?: boolean }
+) {
+  const state = get()
+  const session = state.sessions.find((s) => s.id === sessionId)
+  if (!session) return
+
+  const activeChars = getOrderedActiveChars(session, state.components)
+  const allMsgs = state.messagesBySession[sessionId] ?? []
+  const view = resolveContextView(session, allMsgs, initialParentId)
+
+  const draft = draftGroupSpeakers({
+    session,
+    activeChars,
+    history: view.path,
+    explicitSpeakerId: options.explicitSpeakerId,
+    isAutoContinuation: options.isAutoContinuation,
+  })
+
+  if (draft.kind === 'narrator') {
+    await generateSingleSpeakerReply(get, set, sessionId, initialParentId, {
+      isNarrator: true,
+      mode: 'normal',
+    })
+    return
+  }
+
+  if (draft.speakers.length === 0) {
+    if (draft.reason === 'no_characters') {
+      await generateSingleSpeakerReply(get, set, sessionId, initialParentId, { mode: 'normal' })
+    } else if (draft.reason === 'all_muted') {
+      get().showToast('当前在场角色已全部静音，请取消静音或点击某位角色发言', 'info')
+    } else if (draft.reason === 'manual_wait') {
+      get().showToast('当前为手动点名模式：请点击下方角色头像让 TA 发言', 'info')
+    }
+    return
+  }
+
+  set((s) => ({
+    activeGroupRoundBySession: { ...s.activeGroupRoundBySession, [sessionId]: true },
+  }))
+
+  try {
+    let currentParentId = initialParentId
+    for (const speaker of draft.speakers) {
+      if (stoppedQueueSessions.has(sessionId)) break
+      const res = await generateSingleSpeakerReply(get, set, sessionId, currentParentId, {
+        speaker,
+        mode: 'normal',
+      })
+      if (!res.ok || stoppedQueueSessions.has(sessionId)) {
+        const latestSession = get().sessions.find((s) => s.id === sessionId)
+        if (latestSession?.groupConfig?.autoMode) {
+          const paused: ChatSession = {
+            ...latestSession,
+            groupConfig: { ...resolveGroupChatConfig(latestSession), autoMode: false },
+            updatedAt: Date.now(),
+          }
+          await storage.upsertSession(paused)
+          set((s) => ({
+            sessions: s.sessions.map((item) => (item.id === paused.id ? paused : item)),
+          }))
+        }
+        break
+      }
+      currentParentId = res.messageId
+    }
+  } finally {
+    set((s) => {
+      const next = { ...s.activeGroupRoundBySession }
+      delete next[sessionId]
+      return { activeGroupRoundBySession: next }
+    })
+  }
+}
+
+async function generateSingleSpeakerReply(
   get: () => AppStoreState,
   set: (
     partial:
@@ -1113,11 +1378,11 @@ async function generateAssistantReply(
   ) => void,
   sessionId: string,
   parentId: string | null,
-  options: { nextSpeakerId?: string; mode: 'normal' | 'continue' }
-) {
+  options: { speaker?: CharacterComponent; isNarrator?: boolean; mode: 'normal' | 'continue' }
+): Promise<{ ok: boolean; messageId: string | null }> {
   const state = get()
   const session = state.sessions.find((s) => s.id === sessionId)
-  if (!session) return
+  if (!session) return { ok: false, messageId: null }
 
   const settings = useSettings.getState()
   const provider = getActiveProvider(settings)
@@ -1125,26 +1390,7 @@ async function generateAssistantReply(
   const allMsgs = state.messagesBySession[sessionId] ?? []
   const initialView = resolveContextView(session, allMsgs, parentId)
   let workingSession = session
-
-  // 计算发言角色（单角色默认首位，多角色按模式选择）
-  const activeChars = session.mounts
-    .filter((m) => m.enabled && m.kind === 'character')
-    .sort((a, b) => a.order - b.order)
-    .map((m) => state.components.find((c) => c.id === m.componentId) as CharacterComponent | undefined)
-    .filter((c): c is CharacterComponent => Boolean(c))
-
-  let speaker: CharacterComponent | undefined
-  if (options.nextSpeakerId) {
-    speaker = activeChars.find((c) => c.id === options.nextSpeakerId)
-  } else if (activeChars.length === 1) {
-    speaker = activeChars[0]
-  } else if (activeChars.length > 1 && session.multiCharMode === 'round_robin') {
-    const lastAi = [...initialView.path].reverse().find((m) => m.role === 'assistant' && m.speakerId)
-    const lastIdx = lastAi ? activeChars.findIndex((c) => c.id === lastAi.speakerId) : -1
-    speaker = activeChars[(lastIdx + 1) % activeChars.length]
-  } else if (activeChars.length > 1 && session.multiCharMode === 'manual') {
-    speaker = activeChars[0]
-  }
+  const speaker = options.speaker
 
   let assembled = assemblePrompt({
     session: workingSession,
@@ -1248,7 +1494,7 @@ async function generateAssistantReply(
     role: 'assistant',
     speakerId: speaker?.id,
     speakerName:
-      speaker?.name ?? (activeChars.length > 1 ? '场景演绎' : undefined),
+      speaker?.name ?? (options.isNarrator ? '场景演绎' : undefined),
     speakerAvatar: speaker?.avatar,
     content: '',
     reasoning: '',
@@ -1281,11 +1527,15 @@ async function generateAssistantReply(
   let accContent = ''
   let accReasoning = ''
   let lastPersist = 0
+  let succeeded = false
 
   const flushMessageToState = (persistNow: boolean) => {
+    const cleanContent = speaker
+      ? stripLeadingSpeakerPrefix(accContent, speaker.name)
+      : accContent
     const updatedMsg: ChatMessage = {
       ...assistantMsg,
-      content: accContent,
+      content: cleanContent,
       reasoning: accReasoning || undefined,
       updatedAt: Date.now(),
     }
@@ -1324,6 +1574,7 @@ async function generateAssistantReply(
       },
     })
     flushMessageToState(true)
+    succeeded = !controller.signal.aborted
   } catch (err) {
     if (!controller.signal.aborted) {
       const errText = err instanceof Error ? err.message : String(err)
@@ -1342,6 +1593,7 @@ async function generateAssistantReply(
       return { streamingBySession: next }
     })
   }
+  return { ok: succeeded, messageId: assistantMsg.id }
 }
 
 registerStoreSyncReload(() => useAppStore.getState().reloadFromStorage())

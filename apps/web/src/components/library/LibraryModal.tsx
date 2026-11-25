@@ -27,6 +27,7 @@ import { saveFileBlob } from '../../utils/fileSave.ts'
 import {
   IconArrowLeft,
   IconCheck,
+  IconChevronRight,
   IconClose,
   IconDownload,
   IconEdit,
@@ -43,7 +44,7 @@ import { Modal } from '../base/Modal.tsx'
 import styles from './LibraryModal.module.css'
 
 type LibraryKind = 'character' | 'world' | 'rule'
-type LibraryViewMode = 'list' | 'create' | 'edit'
+type LibraryViewMode = 'list' | 'detail' | 'create' | 'edit'
 
 const KIND_LABELS: Record<ComponentKind, string> = {
   character: '角色卡',
@@ -595,6 +596,217 @@ const CardFormFields = ({ card, groups, onChange, onUploadAvatar }: CardFormFiel
   )
 }
 
+const DetailSection = ({
+  title,
+  value,
+  mono,
+}: {
+  title: string
+  value?: string
+  mono?: boolean
+}) => {
+  const cleaned = value?.trim()
+  if (!cleaned) return null
+  return (
+    <section className={styles.detailSection}>
+      <h4 className={styles.detailSectionTitle}>{title}</h4>
+      <div className={clsx(styles.detailText, mono && styles.detailTextMono)}>{cleaned}</div>
+    </section>
+  )
+}
+
+const CardDetailView = ({
+  card,
+  groupNameOf,
+}: {
+  card: ComponentItem
+  groupNameOf: (groupId: string) => string
+}) => {
+  const groupNames = (card.groups ?? []).map(groupNameOf).filter(Boolean)
+
+  return (
+    <div className={styles.detailWrap}>
+      <div className={styles.detailHero}>
+        {card.avatar ? (
+          <img className={styles.detailAvatar} src={card.avatar} alt={card.name} />
+        ) : (
+          <span className={styles.detailAvatarFallback}>
+            {card.kind === 'character' ? (
+              <IconSparkles size={24} />
+            ) : card.kind === 'world' ? (
+              <IconGlobe size={24} />
+            ) : (
+              <IconSliders size={24} />
+            )}
+          </span>
+        )}
+        <div className={styles.detailHeroMeta}>
+          <h3 className={styles.detailTitle}>{card.name}</h3>
+          <div className={styles.detailBadgeRow}>
+            <span className={styles.detailKindBadge}>{KIND_LABELS[card.kind]}</span>
+            {groupNames.map((g) => (
+              <span key={g} className={styles.detailTag}>
+                分组：{g}
+              </span>
+            ))}
+            {card.tags.map((t) => (
+              <span key={t} className={styles.detailTag}>
+                #{t}
+              </span>
+            ))}
+          </div>
+          {card.origin ? (
+            <div className={styles.detailOrigin}>
+              来源：{card.origin.providerName}
+              {card.origin.creator ? ` · 作者：${card.origin.creator}` : ''}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {card.kind === 'character'
+        ? (() => {
+            const char = card as CharacterComponent
+            const p = char.payload
+            const hasAny = Boolean(
+              p.description.trim() ||
+                p.personality.trim() ||
+                p.scenario.trim() ||
+                p.firstMessage.trim() ||
+                p.alternateGreetings.some((g) => g.trim()) ||
+                p.exampleDialogue.trim() ||
+                p.creatorNotes.trim() ||
+                p.systemPrompt.trim() ||
+                p.postHistoryInstructions.trim()
+            )
+            return hasAny ? (
+              <>
+                <DetailSection title="角色设定（外貌、背景与说话风格）" value={p.description} />
+                <DetailSection title="性格关键词" value={p.personality} />
+                <DetailSection title="默认场景" value={p.scenario} />
+                <DetailSection title="开场白" value={p.firstMessage} />
+                {p.alternateGreetings.filter((g) => g.trim()).length > 0 ? (
+                  <section className={styles.detailSection}>
+                    <h4 className={styles.detailSectionTitle}>
+                      备选开场白（{p.alternateGreetings.filter((g) => g.trim()).length} 条）
+                    </h4>
+                    <div className={styles.detailStack}>
+                      {p.alternateGreetings
+                        .filter((g) => g.trim())
+                        .map((g, idx) => (
+                          <div key={idx} className={styles.detailQuoteCard}>
+                            <span className={styles.detailSubIdx}>#{idx + 2}</span>
+                            <div className={styles.detailText}>{g.trim()}</div>
+                          </div>
+                        ))}
+                    </div>
+                  </section>
+                ) : null}
+                <DetailSection title="示例对话" value={p.exampleDialogue} mono />
+                <DetailSection title="角色系统指令" value={p.systemPrompt} />
+                <DetailSection title="尾部强化指令" value={p.postHistoryInstructions} />
+                <DetailSection title="作者说明 / 备注" value={p.creatorNotes} />
+              </>
+            ) : (
+              <div className={styles.detailEmpty}>
+                当前暂未填写设定内容。你可以点击上方「编辑」补充角色人设、开场白或更换头像。
+              </div>
+            )
+          })()
+        : null}
+
+      {card.kind === 'world'
+        ? (() => {
+            const world = card as WorldComponent
+            const entries = world.payload.entries
+            return (
+              <>
+                <DetailSection title="世界观背景说明" value={world.payload.description} />
+                <section className={styles.detailSection}>
+                  <h4 className={styles.detailSectionTitle}>设定条目（共 {entries.length} 条）</h4>
+                  {entries.length === 0 ? (
+                    <div className={styles.detailEmpty}>暂无条目，点击上方「编辑」添加世界观设定。</div>
+                  ) : (
+                    <div className={styles.detailStack}>
+                      {entries.map((entry) => (
+                        <div key={entry.id} className={styles.detailEntryCard}>
+                          <div className={styles.detailEntryHead}>
+                            <strong>{entry.name}</strong>
+                            <span
+                              className={clsx(
+                                styles.detailLightBadge,
+                                entry.constant ? styles.detailLightBlue : styles.detailLightGreen
+                              )}
+                            >
+                              {entry.constant ? '蓝灯常驻' : '绿灯关键词'}
+                            </span>
+                          </div>
+                          {!entry.constant && entry.keys.length > 0 ? (
+                            <div className={styles.detailBadgeRow}>
+                              {entry.keys.map((k) => (
+                                <span key={k} className={styles.detailTag}>
+                                  {k}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {entry.content.trim() ? (
+                            <div className={styles.detailText}>{entry.content.trim()}</div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </>
+            )
+          })()
+        : null}
+
+      {card.kind === 'rule'
+        ? (() => {
+            const rule = card as RuleComponent
+            const p = rule.payload
+            const hasSampling =
+              typeof p.temperature === 'number' ||
+              typeof p.topP === 'number' ||
+              typeof p.maxTokens === 'number' ||
+              typeof p.maxContextTokens === 'number'
+            return (
+              <>
+                <DetailSection title="规则说明" value={p.description} />
+                <DetailSection title="系统预设指令（System Prompt）" value={p.systemPrompt} />
+                <DetailSection
+                  title="对话末尾强化指令（Post-History）"
+                  value={p.postHistoryInstructions}
+                />
+                {hasSampling ? (
+                  <section className={styles.detailSection}>
+                    <h4 className={styles.detailSectionTitle}>采样与窗口参数</h4>
+                    <div className={styles.detailBadgeRow}>
+                      {typeof p.temperature === 'number' ? (
+                        <span className={styles.detailTag}>Temperature: {p.temperature}</span>
+                      ) : null}
+                      {typeof p.topP === 'number' ? (
+                        <span className={styles.detailTag}>Top P: {p.topP}</span>
+                      ) : null}
+                      {typeof p.maxTokens === 'number' ? (
+                        <span className={styles.detailTag}>最大回复: {p.maxTokens} tok</span>
+                      ) : null}
+                      {typeof p.maxContextTokens === 'number' ? (
+                        <span className={styles.detailTag}>上下文上限: {p.maxContextTokens} tok</span>
+                      ) : null}
+                    </div>
+                  </section>
+                ) : null}
+              </>
+            )
+          })()
+        : null}
+    </div>
+  )
+}
+
 export const LibraryModal = () => {
   const open = useAppStore((s) => s.libraryOpen)
   const initialTab = useAppStore((s) => s.libraryInitialTab)
@@ -641,7 +853,7 @@ export const LibraryModal = () => {
     } else if (editingId && components.some((c) => c.id === editingId && c.kind !== 'persona')) {
       setSelectedId(editingId)
       setDraftCard(null)
-      setViewMode('edit')
+      setViewMode('detail')
     } else {
       setSelectedId(null)
       setDraftCard(null)
@@ -675,6 +887,12 @@ export const LibraryModal = () => {
     setDraftCard(buildDraftCard(kind))
     setSelectedId(null)
     setViewMode('create')
+  }
+
+  const openDetailView = (item: ComponentItem) => {
+    setSelectedId(item.id)
+    setDraftCard(null)
+    setViewMode('detail')
   }
 
   const openEditView = (item: ComponentItem) => {
@@ -1023,7 +1241,19 @@ export const LibraryModal = () => {
               ) : (
                 <div className={styles.grid}>
                   {filtered.map((item) => (
-                    <div key={item.id} className={styles.card}>
+                    <div
+                      key={item.id}
+                      role="button"
+                      tabIndex={0}
+                      className={clsx(styles.card, styles.cardClickable)}
+                      onClick={() => openDetailView(item)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          openDetailView(item)
+                        }
+                      }}
+                    >
                       {item.avatar ? (
                         <img className={styles.avatar} src={item.avatar} alt="" />
                       ) : (
@@ -1037,7 +1267,7 @@ export const LibraryModal = () => {
                           )}
                         </span>
                       )}
-                      <div className={styles.itemInfo} onClick={() => openEditView(item)}>
+                      <div className={styles.itemInfo}>
                         <div className={styles.itemTitle}>{item.name}</div>
                         <div className={styles.itemSub}>
                           {KIND_LABELS[item.kind]}
@@ -1052,14 +1282,10 @@ export const LibraryModal = () => {
                             : ''}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        className={styles.editBtn}
-                        onClick={() => openEditView(item)}
-                      >
-                        <IconEdit size={13} />
-                        <span>编辑</span>
-                      </button>
+                      <span className={styles.detailCue}>
+                        <span>详情</span>
+                        <IconChevronRight size={13} />
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1140,7 +1366,7 @@ export const LibraryModal = () => {
               />
             </div>
           </>
-        ) : selected ? (
+        ) : viewMode === 'detail' && selected ? (
           <>
             <div className={styles.editorBar}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1155,9 +1381,72 @@ export const LibraryModal = () => {
                   <IconArrowLeft size={14} />
                   <span>返回卡牌库</span>
                 </button>
+                <span className={styles.editorTitle}>{KIND_LABELS[selected.kind]}详情</span>
+              </div>
+              <div className={styles.editorActions}>
+                <button
+                  type="button"
+                  className={clsx(styles.btn, styles.btnPrimary)}
+                  onClick={() => openEditView(selected)}
+                >
+                  <IconEdit size={14} />
+                  <span>编辑</span>
+                </button>
+                {selected.kind === 'character' || selected.kind === 'world' ? (
+                  <button
+                    type="button"
+                    className={styles.btn}
+                    onClick={() => void handleExportCard(selected)}
+                  >
+                    <IconDownload size={14} />
+                    <span>{selected.kind === 'character' ? '导出 PNG' : '导出 JSON'}</span>
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={clsx(styles.btn, styles.btnDanger)}
+                  onClick={() => {
+                    if (window.confirm(`确定删除「${selected.name}」吗？`)) {
+                      const delId = selected.id
+                      setSelectedId(null)
+                      setViewMode('list')
+                      void deleteComponent(delId)
+                    }
+                  }}
+                >
+                  <IconTrash size={14} />
+                  <span>删除</span>
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.editor}>
+              <CardDetailView card={selected} groupNameOf={groupNameOf} />
+            </div>
+          </>
+        ) : selected ? (
+          <>
+            <div className={styles.editorBar}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  type="button"
+                  className={styles.backBtn}
+                  onClick={() => setViewMode('detail')}
+                >
+                  <IconArrowLeft size={14} />
+                  <span>返回详情</span>
+                </button>
                 <span className={styles.editorTitle}>编辑{KIND_LABELS[selected.kind]}</span>
               </div>
               <div className={styles.editorActions}>
+                <button
+                  type="button"
+                  className={clsx(styles.btn, styles.btnAccent)}
+                  onClick={() => setViewMode('detail')}
+                >
+                  <IconCheck size={14} />
+                  <span>完成</span>
+                </button>
                 {selected.kind === 'character' || selected.kind === 'world' ? (
                   <button
                     type="button"

@@ -43,6 +43,25 @@
   font-size: 12px;
 }
 
+.searchClearBtn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.searchClearBtn:hover {
+  color: var(--text-primary);
+}
+
 .sourcesBtn {
   height: 36px;
   padding: 0 10px;
@@ -74,71 +93,235 @@
 
 .filterRow {
   flex: 0 0 auto;
-  padding: 0 18px 10px;
+  padding: 0 18px 8px;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 10px 12px;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.toggle {
-  padding: 0;
+.filterPills {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.filterPills::-webkit-scrollbar {
+  display: none;
+}
+
+.facetBtn {
+  height: 29px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.facetBtn:hover {
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.facetBtnActive {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.filterMeta {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.filterCount {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.resetFilterBtn {
+  padding: 2px 6px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.resetFilterBtn:hover {
+  background: var(--accent-soft);
+}
+
+.filterDrawer {
+  flex: 0 0 auto;
+  margin: 0 18px 10px;
+  padding: 12px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drawerSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drawerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.tagMiniInput {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-base);
   color: var(--text-primary);
   font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+  font-size: 11.5px;
 }
 
-.switch {
-  position: relative;
-  width: 34px;
-  height: 19px;
-  flex: 0 0 auto;
-  border-radius: 99px;
-  background: var(--bg-active);
-  transition: background 0.15s;
+.tagMiniInput:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
-.knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-  transition: transform 0.15s;
+.chipCloud {
+  max-height: 156px;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.toggleOn .switch {
-  background: var(--accent);
-}
-
-.toggleOn .knob {
-  transform: translateX(15px);
-}
-
-.sourceTipBtn {
-  margin-left: auto;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
+.filterChip {
+  height: 27px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  color: var(--text-secondary);
   font: inherit;
-  font-size: 10.5px;
-  white-space: nowrap;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   cursor: pointer;
-  transition: color 0.15s;
 }
 
-.sourceTipBtn:hover {
+.filterChip:hover {
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.filterChipOn {
+  border-color: var(--accent);
+  background: var(--accent-soft);
   color: var(--accent);
+  font-weight: 600;
+}
+
+.chipCount {
+  font-size: 10px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.emptyTagHint {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 2px;
+}
+
+.drawerFooter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.drawerSecondaryBtn {
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.drawerPrimaryBtn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.activeStrip {
+  flex: 0 0 auto;
+  padding: 0 18px 8px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.selectedPill {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
 }
 
 .tabs {
@@ -271,12 +454,27 @@
   gap: 3px;
 }
 
-.tags span {
-  padding: 2px 5px;
+.cardTagBtn {
+  padding: 2px 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 99px;
+  background: transparent;
   color: var(--text-muted);
-  font-size: 8.5px;
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.cardTagBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cardTagBtnOn {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .cardFooter {
@@ -801,8 +999,13 @@
     padding: 12px 12px 8px;
   }
 
-  .filterRow {
+  .filterRow,
+  .activeStrip {
     padding: 0 12px 8px;
+  }
+
+  .filterDrawer {
+    margin: 0 12px 8px;
   }
 
   .dropHint {

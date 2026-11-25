@@ -1,7 +1,8 @@
+import { buildContextMemoryBlock } from './compaction.ts'
+import { resolveGroupChatConfig } from './groupChat.ts'
 import { substituteMacros, type MacroContext } from './macros.ts'
 import { applyRegexScripts } from './regex.ts'
 import { estimateMessageTokens } from './token.ts'
-import { buildContextMemoryBlock } from './compaction.ts'
 import type {
   AssembledPrompt,
   CharacterComponent,
@@ -49,9 +50,13 @@ const DEFAULT_PROMPT_ORDER: PromptSlotKey[] = [
   'rule_post_history',
 ]
 
-function buildCharacterBlock(char: CharacterComponent, macro: MacroContext): string {
+function buildCharacterBlock(
+  char: CharacterComponent,
+  macro: MacroContext,
+  headingPrefix = '# 角色：'
+): string {
   const p = char.payload
-  const parts: string[] = [`# 角色：${char.name}`]
+  const parts: string[] = [`${headingPrefix}${char.name}`]
   if (p.description.trim()) {
     parts.push(substituteMacros(p.description.trim(), macro))
   }
@@ -62,6 +67,15 @@ function buildCharacterBlock(char: CharacterComponent, macro: MacroContext): str
     parts.push(`当前场景：${substituteMacros(p.scenario.trim(), macro)}`)
   }
   return parts.join('\n')
+}
+
+function summarizeCompanion(char: CharacterComponent, macro: MacroContext): string {
+  const raw = substituteMacros(
+    char.payload.description.trim() || char.payload.personality.trim(),
+    macro
+  ).replace(/\s+/g, ' ')
+  const brief = raw.length > 140 ? `${raw.slice(0, 140)}…` : raw
+  return brief ? `- ${char.name}：${brief}` : `- ${char.name}`
 }
 
 function buildUserPovBlock(char: CharacterComponent): string {
@@ -149,6 +163,12 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
       : undefined) ?? characters[0]
   const activeCharName = targetChar?.name || 'AI 助手'
   const groupNames = characters.map((c) => c.name)
+  const groupCfg = resolveGroupChatConfig(options.session)
+  const isMultiChar = characters.length > 1
+  const isSoloGroupSpeaker =
+    isMultiChar && options.session.multiCharMode !== 'narrator' && Boolean(targetChar)
+  const useSwapIsolation = isSoloGroupSpeaker && groupCfg.generationMode === 'swap'
+  const charPromptOwners = useSwapIsolation && targetChar ? [targetChar] : characters
 
   // 提取历史文本摘要用于宏和世界书扫描
   const lastMsg = options.history.at(-1)?.content ?? ''
@@ -203,7 +223,7 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
       promptRegexScripts.push(...rule.payload.regexScripts)
     }
   }
-  for (const char of characters) {
+  for (const char of charPromptOwners) {
     if (char.payload.regexScripts) {
       promptRegexScripts.push(...char.payload.regexScripts)
     }
@@ -233,7 +253,7 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
     }
   }
   // 角色自带的 systemPrompt
-  for (const char of characters) {
+  for (const char of charPromptOwners) {
     const text = substituteMacros(char.payload.systemPrompt.trim(), macroCtx)
     if (text) {
       ruleSystemMsgs.push({
@@ -257,23 +277,66 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
     }
   })
 
-  const characterMsgs: LlmChatMessage[] = characters.map((char) => {
-    const content = buildCharacterBlock(char, { ...macroCtx, charName: char.name })
-    return {
+  const characterMsgs: LlmChatMessage[] = []
+  if (useSwapIsolation && targetChar) {
+    const mainContent = buildCharacterBlock(
+      targetChar,
+      { ...macroCtx, charName: targetChar.name },
+      '# 当前你扮演的角色：'
+    )
+    characterMsgs.push({
       role: 'system',
-      content,
-      sourceLabel: `角色 · ${char.name}`,
+      content: mainContent,
+      sourceLabel: `主视角角色 · ${targetChar.name}`,
       sourceKind: 'character',
-      tokens: estimateMessageTokens(content),
+      tokens: estimateMessageTokens(mainContent),
+    })
+
+    const companions = characters.filter((c) => c.id !== targetChar.id)
+    if (companions.length > 0) {
+      const compText = [
+        '[同场其他在场角色（你可感知并对他们的话语作出回应，但绝不可代为发言）]',
+        ...companions.map((c) => summarizeCompanion(c, { ...macroCtx, charName: c.name })),
+      ].join('\n')
+      characterMsgs.push({
+        role: 'system',
+        content: compText,
+        sourceLabel: '同场其他角色概览',
+        sourceKind: 'character',
+        tokens: estimateMessageTokens(compText),
+      })
     }
-  })
+  } else {
+    const joinPrefixTpl = groupCfg.joinPrefix?.trim() || '### {{char}}'
+    for (const char of characters) {
+      const charMacro = { ...macroCtx, charName: char.name }
+      const content = isSoloGroupSpeaker
+        ? `${substituteMacros(joinPrefixTpl, charMacro)}\n${buildCharacterBlock(char, charMacro)}`
+        : buildCharacterBlock(char, charMacro)
+      characterMsgs.push({
+        role: 'system',
+        content,
+        sourceLabel: `角色 · ${char.name}`,
+        sourceKind: 'character',
+        tokens: estimateMessageTokens(content),
+      })
+    }
+  }
 
   // 多角色协同指令
-  if (characters.length > 1) {
+  if (isMultiChar) {
+    const interactionLine = groupCfg.encourageInteraction
+      ? '若对话末尾刚有其他角色发言，请主动接住对方刚才的话茬、槽点或立场分歧（支持调侃、质疑、辩论或拌嘴反驳），展现角色间的互动张力，切忌自说自话或复读。'
+      : '请围绕当前话题自然回应，不要重复前面角色已经表达过的相同内容。'
     const modePrompt =
       options.session.multiCharMode === 'narrator'
         ? `当前场景共有多位在场角色：${groupNames.join('、')}。请自然推进剧情，根据情境安排合适的角色互动与台词，保持各自人设鲜明。`
-        : `当前场景在场角色：${groupNames.join('、')}。本轮请仅以「${activeCharName}」的视角与口吻作出回应，不要替其他角色或${activeUserName}代为发言。`
+        : [
+            `当前为多角色群聊场景，在场角色：${groupNames.join('、')}；用户身份：${activeUserName}。`,
+            `本轮请仅以「${activeCharName}」的视角与口吻作出回应，不要替其他角色或${activeUserName}代为发言。`,
+            interactionLine,
+            `格式要求：聊天记录中带 [角色名]: 的消息仅为区分历史说话人；你输出正文时不要在开头带「${activeCharName}:」或「[${activeCharName}]:」前缀。`,
+          ].join('\n')
     characterMsgs.push({
       role: 'system',
       content: modePrompt,
@@ -327,7 +390,7 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   })
 
   const exampleMsgs: LlmChatMessage[] = []
-  for (const char of characters) {
+  for (const char of charPromptOwners) {
     if (char.payload.exampleDialogue.trim()) {
       exampleMsgs.push(
         ...parseExampleDialogue(char.payload.exampleDialogue, { ...macroCtx, charName: char.name })
@@ -348,7 +411,7 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
       })
     }
   }
-  for (const char of characters) {
+  for (const char of charPromptOwners) {
     const text = substituteMacros(char.payload.postHistoryInstructions.trim(), macroCtx)
     if (text) {
       postHistoryMsgs.push({
@@ -359,6 +422,18 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
         tokens: estimateMessageTokens(text),
       })
     }
+  }
+  if (isSoloGroupSpeaker) {
+    const turnNote = groupCfg.encourageInteraction
+      ? `[当前轮次发言角色：${activeCharName}] 请严格保持「${activeCharName}」的语气直接接话或与上一位在场角色互动吐槽，只写你自己的台词与动作，不要输出角色名前缀。`
+      : `[当前轮次发言角色：${activeCharName}] 请以「${activeCharName}」的口吻回应，只写自己的部分，不要输出角色名前缀。`
+    postHistoryMsgs.push({
+      role: 'system',
+      content: turnNote,
+      sourceLabel: `群聊轮次提醒 · ${activeCharName}`,
+      sourceKind: 'character',
+      tokens: estimateMessageTokens(turnNote),
+    })
   }
   if (options.mode === 'continue') {
     const nudge = '请紧接你上一条未完成的回复继续往下写，不要重复已输出的内容。'
@@ -440,7 +515,7 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
       },
     })
   }
-  for (const char of characters) {
+  for (const char of charPromptOwners) {
     if (char.payload.depthPrompt?.prompt.trim()) {
       const content = substituteMacros(char.payload.depthPrompt.prompt.trim(), {
         ...macroCtx,
@@ -489,8 +564,7 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
     maxContextTokens - maxResponseTokens - fixedTokens
   )
 
-  // 转换历史消息（多角色下保留发言者前缀以便模型区分身份）
-  const isMultiChar = characters.length > 1
+  // 转换历史消息（多角色下保留发言者标签以便模型清晰区分说话人）
   const formattedHistory: LlmChatMessage[] = options.history.map((m, idx) => {
     const depthFromEnd = options.history.length - 1 - idx
     let content = substituteMacros(m.content, macroCtx)
@@ -498,9 +572,10 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
       content = applyRegexScripts(content, promptRegexScripts, 'prompt_only', depthFromEnd)
     }
     if (isMultiChar && m.role === 'assistant' && m.speakerName) {
-      const prefix = `${m.speakerName}: `
-      if (!content.startsWith(prefix) && !content.startsWith(`${m.speakerName}：`)) {
-        content = `${prefix}${content}`
+      const hasBracket = content.startsWith(`[${m.speakerName}]:`) || content.startsWith(`[${m.speakerName}]：`)
+      const hasColon = content.startsWith(`${m.speakerName}: `) || content.startsWith(`${m.speakerName}：`)
+      if (!hasBracket && !hasColon) {
+        content = `[${m.speakerName}]: ${content}`
       }
     }
     return {

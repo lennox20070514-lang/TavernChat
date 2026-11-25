@@ -6,6 +6,14 @@ export const CURRENT_APP_VERSION =
   typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0'
 export const CURRENT_ANDROID_VERSION_CODE =
   typeof __ANDROID_VERSION_CODE__ !== 'undefined' ? __ANDROID_VERSION_CODE__ : 1
+export const BUILTIN_UPDATE_MANIFEST_URL =
+  typeof __DEFAULT_UPDATE_MANIFEST_URL__ !== 'undefined'
+    ? __DEFAULT_UPDATE_MANIFEST_URL__.trim()
+    : ''
+export const BUILTIN_UPDATE_MIRROR_URL =
+  typeof __DEFAULT_UPDATE_MIRROR_URL__ !== 'undefined'
+    ? __DEFAULT_UPDATE_MIRROR_URL__.trim()
+    : ''
 
 const LAST_CHECK_KEY = 'tavernchat.update.lastCheckAt.v1'
 const AUTO_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
@@ -205,7 +213,9 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     if (get().checking) return { status: 'skipped' }
 
     const settings = useSettings.getState()
-    const candidates = buildManifestCandidates(settings.updateManifestUrl, settings.updateMirrorUrl)
+    const effectiveManifestUrl = BUILTIN_UPDATE_MANIFEST_URL || settings.updateManifestUrl
+    const effectiveMirrorUrl = BUILTIN_UPDATE_MIRROR_URL || settings.updateMirrorUrl
+    const candidates = buildManifestCandidates(effectiveManifestUrl, effectiveMirrorUrl)
     if (candidates.length === 0) {
       return { status: 'unconfigured' }
     }
@@ -263,7 +273,7 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
         return { status: 'skipped' }
       }
 
-      const links = resolveDownloadLinks(parsedManifest, settings.updateMirrorUrl)
+      const links = resolveDownloadLinks(parsedManifest, effectiveMirrorUrl)
       if (!links.preferredUrl) {
         return { status: 'latest', version: CURRENT_APP_VERSION }
       }

@@ -695,15 +695,36 @@ export function importSillyTavernChatJsonl(
 export function parseSillyTavernGroupJson(rawJson: unknown): {
   name: string
   memberNames: string[]
+  multiCharMode?: 'natural' | 'round_robin' | 'manual'
+  groupConfig?: {
+    generationMode: 'swap' | 'join'
+    allowSelfReply: boolean
+    hideMuted: boolean
+    autoModeDelaySec: number
+  }
 } {
   const parsed = typeof rawJson === 'string' ? (JSON.parse(rawJson) as unknown) : rawJson
   if (!isRecord(parsed)) {
     throw new Error('无效的群聊 JSON 格式')
   }
   const members = asStringArray(parsed.members).map((m) => m.replace(/\.png$/i, ''))
+  const strategyNum = Number(parsed.activation_strategy)
+  const multiCharMode =
+    strategyNum === 1 ? 'round_robin' : strategyNum === 2 ? 'manual' : 'natural'
+  const genModeNum = Number(parsed.generation_mode)
   return {
     name: asString(parsed.name, '导入的多角色对话'),
     memberNames: members,
+    multiCharMode,
+    groupConfig: {
+      generationMode: genModeNum === 1 ? 'join' : 'swap',
+      allowSelfReply: asBool(parsed.allow_self_responses, false),
+      hideMuted: asBool(parsed.hide_muted_sprites, false),
+      autoModeDelaySec:
+        typeof parsed.auto_mode_delay === 'number' && parsed.auto_mode_delay > 0
+          ? Math.round(parsed.auto_mode_delay)
+          : 5,
+    },
   }
 }
 
@@ -712,7 +733,18 @@ export type DetectedImportResult =
   | { kind: 'world'; world: WorldComponent }
   | { kind: 'rule'; rule: RuleComponent }
   | { kind: 'chat_jsonl'; title?: string; messages: ChatMessage[]; activeLeafId: string | null }
-  | { kind: 'group'; name: string; memberNames: string[] }
+  | {
+      kind: 'group'
+      name: string
+      memberNames: string[]
+      multiCharMode?: 'natural' | 'round_robin' | 'manual'
+      groupConfig?: {
+        generationMode: 'swap' | 'join'
+        allowSelfReply: boolean
+        hideMuted: boolean
+        autoModeDelaySec: number
+      }
+    }
   | {
       kind: 'tavern_backup'
       components: ComponentItem[]

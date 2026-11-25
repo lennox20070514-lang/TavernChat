@@ -884,7 +884,7 @@ export const SettingsModal = () => {
               <div className={styles.card}>
                 <div className={styles.cardTopRow}>
                   <div>
-                    <div className={styles.sectionTitle}>应用版本与检查更新</div>
+                    <div className={styles.sectionTitle}>应用版本与更新</div>
                     <div className={styles.hint}>
                       当前版本：v{CURRENT_APP_VERSION}（Build {CURRENT_ANDROID_VERSION_CODE}）
                     </div>
@@ -898,7 +898,7 @@ export const SettingsModal = () => {
                       <span className={styles.hint}>
                         {availableUpdate.viaMirror
                           ? '已通过国内镜像加速线路就绪，可直连下载安装包。'
-                          : '来自 GitHub Releases，点击即可下载安装。'}
+                          : '发现新版本，点击即可查看更新日志并下载安装包。'}
                       </span>
                     </div>
                     <button
@@ -927,7 +927,7 @@ export const SettingsModal = () => {
                     onClick={async () => {
                       const outcome = await checkForUpdates({ force: true, silent: false })
                       if (outcome.status === 'unconfigured') {
-                        showToast('请先在下方填写 GitHub Release 清单地址或镜像地址', 'info')
+                        showToast('当前为测试构建版，官方发布通道接入后即可自动检查更新', 'info')
                       } else if (outcome.status === 'latest') {
                         showToast(`当前已是最新版本 v${outcome.version}`, 'success')
                       } else if (outcome.status === 'error') {
@@ -941,36 +941,9 @@ export const SettingsModal = () => {
                     <span>{checkingUpdate ? '正在检查…' : '立即检查更新'}</span>
                   </button>
                 </div>
-              </div>
 
-              <div className={styles.card}>
-                <div className={styles.sectionTitle}>GitHub Releases 与国内镜像配置</div>
                 <div className={styles.hint}>
-                  配置仓库 Release 的 <code>latest.json</code> 清单地址后，应用每次启动都会自动检测新版本并在有更新时弹窗提醒；填写国内镜像或加速前缀后，会优先走高速线路检查并下载 APK。
-                </div>
-
-                <div className={styles.field}>
-                  <label className={styles.label}>版本清单地址（GitHub Releases latest.json）</label>
-                  <input
-                    className={styles.input}
-                    placeholder="https://github.com/用户名/仓库名/releases/latest/download/latest.json"
-                    value={settings.updateManifestUrl}
-                    onChange={(e) =>
-                      settings.updateGeneral({ updateManifestUrl: e.target.value })
-                    }
-                  />
-                </div>
-
-                <div className={styles.field}>
-                  <label className={styles.label}>国内镜像地址或加速前缀（可选，优先用于检查与下载）</label>
-                  <input
-                    className={styles.input}
-                    placeholder="填镜像站 latest.json（以 .json 结尾）或加速前缀（如 https://cdn.example.com/）"
-                    value={settings.updateMirrorUrl}
-                    onChange={(e) =>
-                      settings.updateGeneral({ updateMirrorUrl: e.target.value })
-                    }
-                  />
+                  打开应用时会自动在后台检测新版本，发现更新会弹窗提醒并自动优先走国内加速下载线路。
                 </div>
               </div>
             </>

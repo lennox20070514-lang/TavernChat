@@ -15,6 +15,7 @@ import {
   createEmptyPersona,
   createEmptyWorld,
   createMinimalPlaceholderPng,
+  draftGroupSpeakers,
   exportCharacterToSillyTavernPng,
   exportWorldToSillyTavernJson,
   extractCompactionSummary,
@@ -26,12 +27,14 @@ import {
   normalizeChubLorebookPayload,
   normalizeChubPresetPayload,
   parseMarketManifest,
+  parseSillyTavernGroupJson,
   parseSyncSnapshot,
   planCompaction,
   readCharacterJsonFromPng,
   resolveCompactionBudget,
   scanWorldInfo,
   smartImportFile,
+  stripLeadingSpeakerPrefix,
   substituteMacros,
   BUILTIN_MARKET_PLUGINS,
   type ChatMessage,
@@ -894,4 +897,140 @@ test('Importers handle PNG iTXt/zTXt, CHARX zip, NovelAI lorebooks, BOM, prompt_
   const starters = createBuiltinStarterCharacters()
   assert.ok(starters.some((c) => c.name === 'DeepSeek 子午老师' && c.avatar === 'avatars/ziwu.jpg'))
   assert.ok(starters.some((c) => c.name === 'DeepSeek 鲸鱼娘' && c.avatar === 'avatars/jingyu.jpg'))
+})
+
+test('Group chat drafts shuffled_round, natural, round_robin, manual, strips prefixes, and isolates swap prompts', () => {
+  const ziwu = createEmptyCharacter('DeepSeek 子午老师')
+  ziwu.id = 'c_ziwu'
+  ziwu.payload.description = '蓝发西装智囊。'
+  ziwu.payload.exampleDialogue = '<START>\n{{user}}: hello\n{{char}}: 冷静思考。'
+
+  const jingyu = createEmptyCharacter('DeepSeek 鲸鱼娘')
+  jingyu.id = 'c_jingyu'
+  jingyu.payload.description = '热爱白米饭的女仆。'
+  jingyu.payload.exampleDialogue = '<START>\n{{user}}: hello\n{{char}}: 我要吃白米饭！'
+
+  const third = createEmptyCharacter('旁观者')
+  third.id = 'c_third'
+
+  const baseSession: ChatSession = {
+    id: 'sg1',
+    title: '群聊测试',
+    mounts: [
+      { componentId: ziwu.id, kind: 'character', enabled: true, order: 0, talkativeness: 20 },
+      { componentId: jingyu.id, kind: 'character', enabled: true, order: 1, talkativeness: 90 },
+      { componentId: third.id, kind: 'character', enabled: true, order: 2, muted: true, talkativeness: 100 },
+    ],
+    authorsNote: '',
+    authorsNoteDepth: 4,
+    multiCharMode: 'shuffled_round',
+    groupConfig: {
+      generationMode: 'swap',
+      maxRepliesPerTurn: 0,
+      encourageInteraction: true,
+      hideMuted: false,
+      autoMode: false,
+      autoModeDelaySec: 4,
+      joinPrefix: '### {{char}}',
+      allowSelfReply: false,
+    },
+    activeLeafId: 'h2',
+    createdAt: 1,
+    updatedAt: 1,
+  }
+
+  const history: ChatMessage[] = [
+    { id: 'h1', sessionId: 'sg1', parentId: null, role: 'user', content: '晚餐怎么安排？', createdAt: 1, updatedAt: 1 },
+    { id: 'h2', sessionId: 'sg1', parentId: 'h1', role: 'assistant', speakerId: ziwu.id, speakerName: ziwu.name, content: '建议营养均衡。', createdAt: 2, updatedAt: 2 },
+  ]
+
+  // 1) shuffled_round: 全员未静音角色都应在一轮中出场，且排除已静音的 third，且首位尽量不重复刚刚说话的 ziwu
+  const shuffled = draftGroupSpeakers({
+    session: baseSession,
+    activeChars: [ziwu, jingyu, third],
+    history,
+    rng: () => 0.1,
+  })
+  assert.equal(shuffled.kind, 'speakers')
+  if (shuffled.kind === 'speakers') {
+    assert.equal(shuffled.speakers.length, 2)
+    assert.equal(shuffled.speakers.some((s) => s.id === third.id), false)
+    assert.equal(shuffled.speakers[0]?.id, jingyu.id)
+  }
+
+  // 2) natural: 点名提及 "鲸鱼娘" 优先触发
+  const naturalMention = draftGroupSpeakers({
+    session: { ...baseSession, multiCharMode: 'natural' },
+    activeChars: [ziwu, jingyu, third],
+    history: [
+      { id: 'h3', sessionId: 'sg1', parentId: 'h2', role: 'user', content: '鲸鱼娘今天想吃啥？', createdAt: 3, updatedAt: 3 },
+    ],
+  })
+  assert.equal(naturalMention.kind, 'speakers')
+  if (naturalMention.kind === 'speakers') {
+    assert.deepEqual(naturalMention.speakers.map((s) => s.id), [jingyu.id])
+  }
+
+  // 3) round_robin: 轮到 ziwu 之后的 jingyu
+  const rr = draftGroupSpeakers({
+    session: {
+      ...baseSession,
+      multiCharMode: 'round_robin',
+      groupConfig: { ...baseSession.groupConfig!, maxRepliesPerTurn: 1 },
+    },
+    activeChars: [ziwu, jingyu, third],
+    history,
+  })
+  assert.equal(rr.kind, 'speakers')
+  if (rr.kind === 'speakers') {
+    assert.deepEqual(rr.speakers.map((s) => s.id), [jingyu.id])
+  }
+
+  // 4) manual: 发消息时不自动触发，点击头像显式点名才触发
+  const manualAuto = draftGroupSpeakers({
+    session: { ...baseSession, multiCharMode: 'manual' },
+    activeChars: [ziwu, jingyu],
+    history,
+  })
+  assert.equal(manualAuto.kind, 'speakers')
+  if (manualAuto.kind === 'speakers') assert.equal(manualAuto.speakers.length, 0)
+
+  const manualPicked = draftGroupSpeakers({
+    session: { ...baseSession, multiCharMode: 'manual' },
+    activeChars: [ziwu, jingyu],
+    history,
+    explicitSpeakerId: ziwu.id,
+  })
+  assert.equal(manualPicked.kind, 'speakers')
+  if (manualPicked.kind === 'speakers') assert.deepEqual(manualPicked.speakers.map((s) => s.id), [ziwu.id])
+
+  // 5) prefix cleaner
+  assert.equal(stripLeadingSpeakerPrefix('[DeepSeek 鲸鱼娘]: 我才不是大肥鱼！', 'DeepSeek 鲸鱼娘'), '我才不是大肥鱼！')
+  assert.equal(stripLeadingSpeakerPrefix('子午老师：冷静一点。', 'DeepSeek 子午老师'), '冷静一点。')
+
+  // 6) assemblePrompt swap isolation + [speakerName]: history
+  const swapPrompt = assemblePrompt({
+    session: baseSession,
+    history,
+    components: [ziwu, jingyu, third],
+    nextSpeakerId: jingyu.id,
+  })
+  assert.ok(swapPrompt.messages.some((m) => m.content.includes('我要吃白米饭')))
+  assert.ok(!swapPrompt.messages.some((m) => m.content.includes('冷静思考')))
+  assert.ok(swapPrompt.messages.some((m) => m.role === 'assistant' && m.content.includes('[DeepSeek 子午老师]: 建议营养均衡。')))
+
+  // 7) SillyTavern Group JSON strategy parsing
+  const parsedGroup = parseSillyTavernGroupJson({
+    name: '酒馆原生态群',
+    members: ['A.png', 'B.png'],
+    activation_strategy: 0,
+    generation_mode: 1,
+    allow_self_responses: true,
+    hide_muted_sprites: true,
+    auto_mode_delay: 6,
+  })
+  assert.equal(parsedGroup.multiCharMode, 'natural')
+  assert.equal(parsedGroup.groupConfig?.generationMode, 'join')
+  assert.equal(parsedGroup.groupConfig?.allowSelfReply, true)
+  assert.equal(parsedGroup.groupConfig?.autoModeDelaySec, 6)
 })
