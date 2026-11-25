@@ -25,30 +25,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: text;
   padding: 3px 6px;
-  border-radius: 6px;
-}
-
-.title:hover {
-  background: var(--bg-hover);
-}
-
-.titleInput {
-  height: 30px;
-  max-width: 280px;
-  width: 100%;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--accent);
-  background: var(--bg-elevated);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.titleInput:focus {
-  outline: none;
 }
 
 .right {

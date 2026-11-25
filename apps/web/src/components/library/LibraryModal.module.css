@@ -4,6 +4,11 @@
   min-height: 0;
 }
 
+.shellDragging {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
 .left {
   width: 310px;
   border-right: 1px solid var(--border-subtle);
@@ -46,6 +51,164 @@
   background: var(--bg-elevated);
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
+}
+
+.groupRow {
+  display: flex;
+  gap: 5px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+}
+
+.groupChip {
+  height: 24px;
+  padding: 0 9px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 99px;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.groupChip:hover {
+  border-color: var(--border-default);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.groupChipActive {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.groupPill {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 99px;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+}
+
+.groupPill:hover {
+  border-color: var(--border-default);
+}
+
+.groupPillActive {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.groupName {
+  height: 22px;
+  padding: 0 7px 0 9px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.groupDelete {
+  width: 18px;
+  height: 18px;
+  margin-right: 2px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.groupDelete:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.newGroupBtn {
+  height: 24px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  border: 1px dashed var(--border-default);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.newGroupBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.newGroupForm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.newGroupForm input {
+  width: 100px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--accent);
+  border-radius: 99px;
+  outline: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 10.5px;
+}
+
+.newGroupSave,
+.newGroupCancel {
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 99px;
+  font: inherit;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.newGroupSave {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast, white);
+}
+
+.newGroupCancel {
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.newGroupCancel:hover {
+  background: var(--bg-hover);
 }
 
 .actionRow {
@@ -184,6 +347,70 @@
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
+}
+
+.emptyList {
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-tertiary);
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.groupEditor {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.groupEditorLabel {
+  flex: 0 0 auto;
+  padding-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.groupEditorEmpty {
+  padding-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.groupEditorOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.groupToggle {
+  height: 28px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border-default);
+  border-radius: 99px;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.groupToggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.groupToggleOn {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .editor {

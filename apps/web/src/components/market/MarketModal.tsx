@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   smartImportFile,
   type ComponentItem,
@@ -33,6 +33,7 @@ import {
   IconRefresh,
   IconSearch,
   IconTrash,
+  IconUpload,
 } from '../base/icons.tsx'
 import { Modal } from '../base/Modal.tsx'
 import { MarketAuthModal } from './MarketAuthModal.tsx'
@@ -45,14 +46,14 @@ type Category = 'all' | MarketResourceKind
 const EMPTY_CATALOG: MarketCatalog = { cards: [], sources: [] }
 const KIND_ORDER: Record<MarketResourceKind, number> = { character: 0, world: 1, rule: 2 }
 const KIND_LABELS: Record<MarketResourceKind, string> = {
-  character: '角色',
-  world: '世界',
+  character: '角色卡',
+  world: '世界书',
   rule: '规则',
 }
 const CATEGORY_TABS: Array<{ key: Category; label: string }> = [
   { key: 'all', label: '全部' },
-  { key: 'character', label: '角色' },
-  { key: 'world', label: '世界' },
+  { key: 'character', label: '角色卡' },
+  { key: 'world', label: '世界书' },
   { key: 'rule', label: '规则' },
 ]
 
@@ -74,8 +75,10 @@ export const MarketModal = () => {
   const components = useAppStore((s) => s.components)
   const upsertComponent = useAppStore((s) => s.upsertComponent)
   const deleteComponent = useAppStore((s) => s.deleteComponent)
+  const importFiles = useAppStore((s) => s.importFiles)
   const showToast = useAppStore((s) => s.showToast)
   const settings = useSettings()
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   const [view, setView] = useState<MarketView>('catalog')
   const [catalog, setCatalog] = useState<MarketCatalog>(EMPTY_CATALOG)
@@ -96,6 +99,7 @@ export const MarketModal = () => {
   const [selectedCard, setSelectedCard] = useState<MarketCard | null>(null)
   const [remoteResults, setRemoteResults] = useState<MarketCard[] | null>(null)
   const [searching, setSearching] = useState(false)
+  const [dragging, setDragging] = useState(false)
 
   const refreshCatalog = useCallback(async () => {
     setLoading(true)
@@ -138,6 +142,7 @@ export const MarketModal = () => {
     if (!open) return
     setView('catalog')
     setQuery('')
+    setCategory('all')
     setRemoteResults(null)
     setSearching(false)
     setSelectedCard(null)
@@ -273,7 +278,7 @@ export const MarketModal = () => {
       } else {
         throw new Error('来源文件与资源分类不一致')
       }
-      showToast(`${card.name} 已下载到素材库`, 'success')
+      showToast(`${card.name} 已下载到卡牌库`, 'success')
     } catch (err) {
       showToast(errorMessage(err), 'error')
     } finally {
@@ -292,6 +297,11 @@ export const MarketModal = () => {
     await installCard(card)
   }
 
+  const handleImportFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    await importFiles(files)
+  }
+
   const handleRemove = async (card: MarketCard) => {
     const matches = components.filter(
       (component) =>
@@ -300,7 +310,7 @@ export const MarketModal = () => {
     )
     if (matches.length === 0) return
     const extra = matches.length > 1 ? '及其配套内容' : ''
-    if (!window.confirm(`从素材库移除「${card.name}」${extra}？`)) return
+    if (!window.confirm(`从卡牌库移除「${card.name}」${extra}？`)) return
     try {
       for (const component of matches) {
         await deleteComponent(component.id)
@@ -320,7 +330,6 @@ export const MarketModal = () => {
       setManifestInput('')
       await Promise.all([refreshPlugins(), refreshCatalog()])
       setView('catalog')
-      setCategory('all')
       setQuery('')
       showToast(`已添加来源：${plugin.name}`, 'success')
     } catch (err) {
@@ -332,7 +341,7 @@ export const MarketModal = () => {
 
   const handleRemoveManifest = async (plugin: MarketPluginView) => {
     if (!plugin.manifestUrl) return
-    if (!window.confirm(`移除来源“${plugin.name}”？已经下载到素材库的内容不会被删除。`)) return
+    if (!window.confirm(`移除来源“${plugin.name}”？已经下载到卡牌库的内容不会被删除。`)) return
     removeManifestPlugin(plugin.manifestUrl)
     await Promise.all([refreshPlugins(), refreshCatalog()])
   }
@@ -360,6 +369,15 @@ export const MarketModal = () => {
         </label>
         <button
           type="button"
+          className={styles.importBtn}
+          onClick={() => importInputRef.current?.click()}
+          title="从本地导入角色卡或世界书"
+        >
+          <IconUpload size={15} />
+          <span>导入</span>
+        </button>
+        <button
+          type="button"
           className={styles.sourcesBtn}
           onClick={() => setView('sources')}
           title="来源管理"
@@ -382,6 +400,7 @@ export const MarketModal = () => {
           </span>
           仅显示已下载
         </button>
+        <span className={styles.dropHint}>也可把 PNG / JSON 文件拖进窗口</span>
       </div>
 
       <div className={styles.tabs}>
@@ -427,8 +446,8 @@ export const MarketModal = () => {
           {searching
             ? '正在搜索全部卡牌…'
             : onlyInstalled
-              ? '这个分类下还没有已下载的资源。'
-              : '没有匹配的资源。'}
+              ? '这里还没有已下载的资源。'
+              : '没有匹配的资源。也可以点右上角「导入」从本地添加角色卡。'}
         </div>
       ) : (
         <div className={styles.grid}>
@@ -671,8 +690,41 @@ export const MarketModal = () => {
 
   return (
     <>
-      <Modal open={open} title="卡牌库" size="lg" onClose={() => setOpen(false)}>
-        <div className={styles.page}>{view === 'catalog' ? renderCatalog() : renderSources()}</div>
+      <Modal open={open} title="卡牌市场" size="lg" onClose={() => setOpen(false)}>
+        <div
+          className={clsx(styles.page, dragging && styles.pageDragging)}
+          onDragEnter={(event) => {
+            event.preventDefault()
+            setDragging(true)
+          }}
+          onDragOver={(event) => {
+            event.preventDefault()
+            setDragging(true)
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setDragging(false)
+            }
+          }}
+          onDrop={(event) => {
+            event.preventDefault()
+            setDragging(false)
+            void handleImportFiles(event.dataTransfer.files)
+          }}
+        >
+          <input
+            ref={importInputRef}
+            type="file"
+            multiple
+            accept=".png,.json,.jsonl"
+            style={{ display: 'none' }}
+            onChange={(event) => {
+              void handleImportFiles(event.target.files)
+              event.target.value = ''
+            }}
+          />
+          {view === 'catalog' ? renderCatalog() : renderSources()}
+        </div>
       </Modal>
       <MarketAuthModal
         open={authPlugin !== null}
@@ -690,6 +742,9 @@ export const MarketModal = () => {
           if (card && card.pluginId === authPlugin.id) {
             void installCard(card)
           }
+          // 登录后立刻带新会话 Cookie 重新拉取目录；否则会停留在登录前的空结果。
+          void refreshCatalog()
+          void refreshPlugins()
         }}
       />
       <MarketDetailModal

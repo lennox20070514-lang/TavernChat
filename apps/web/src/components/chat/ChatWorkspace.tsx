@@ -35,6 +35,7 @@ export const ChatWorkspace = () => {
   const components = useAppStore((s) => s.components)
   const messagesBySession = useAppStore((s) => s.messagesBySession)
   const streamingBySession = useAppStore((s) => s.streamingBySession)
+  const compactingBySession = useAppStore((s) => s.compactingBySession)
 
   const sendMessage = useAppStore((s) => s.sendMessage)
   const stopStreaming = useAppStore((s) => s.stopStreaming)
@@ -83,6 +84,7 @@ export const ChatWorkspace = () => {
   )
 
   const streaming = activeSessionId ? Boolean(streamingBySession[activeSessionId]) : false
+  const compacting = activeSessionId ? compactingBySession[activeSessionId] : undefined
 
   const activeChars = useMemo(() => {
     if (!session) return []
@@ -489,7 +491,7 @@ export const ChatWorkspace = () => {
           <div className={styles.welcome}>
             <h1 className={styles.welcomeTitle}>TavernChat</h1>
             <p className={styles.welcomeSub}>
-              极简本地对话工作台。随时把角色卡、世界卡、人设与规则作为独立组件选入当前对话，或直接拖入 SillyTavern 资产开聊。
+              你的角色，你的世界，你的故事。
             </p>
             <div className={styles.welcomeActions}>
               <button
@@ -506,7 +508,7 @@ export const ChatWorkspace = () => {
                 onClick={() => openLibrary('character')}
               >
                 <IconLayers size={14} />
-                <span>打开组件库</span>
+                <span>打开卡牌库</span>
               </button>
               <button
                 type="button"
@@ -626,6 +628,13 @@ export const ChatWorkspace = () => {
                 <span>~{tokenEstimate} tok</span>
               </button>
 
+              {compacting ? (
+                <span className={styles.compactingChip}>
+                  整理记忆
+                  {compacting.total > 1 ? ` ${compacting.chunk}/${compacting.total}` : '…'}
+                </span>
+              ) : null}
+
               {activeChars.length > 1 ? (
                 <select
                   className={styles.toolChip}
@@ -646,7 +655,7 @@ export const ChatWorkspace = () => {
             <button
               type="button"
               className={clsx(styles.sendBtn, streaming && styles.stopBtn)}
-              disabled={!streaming && !draft.trim() && activePath.length === 0}
+              disabled={Boolean(compacting) || (!streaming && !draft.trim() && activePath.length === 0)}
               onClick={handleSend}
               aria-label={streaming ? '停止生成' : '发送'}
             >

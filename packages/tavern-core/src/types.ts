@@ -163,6 +163,8 @@ export type ComponentItem<K extends ComponentKind = ComponentKind> = {
   avatar?: string
   /** 市场导入的来源与署名 */
   origin?: ComponentOrigin
+  /** 用户自定义分组 ID，可同时属于多个分组 */
+  groups?: string[]
   tags: string[]
   payload: ComponentPayloadMap[K]
   createdAt: number
@@ -201,6 +203,18 @@ export type TriggeredWorldSnapshot = {
   tokens: number
 }
 
+/** 上下文压缩检查点：把某条消息之前的早期历史折叠成结构化长期记忆 */
+export type ContextCheckpoint = {
+  id: string
+  /** 该检查点覆盖到哪一条消息（包含）；只在该分支路径上生效 */
+  upToMessageId: string
+  previousCheckpointId?: string
+  summary: string
+  coveredRounds: number
+  summaryTokens: number
+  createdAt: number
+}
+
 export type ChatMessage = {
   id: string
   sessionId: string
@@ -224,8 +238,12 @@ export type ChatMessage = {
 export type ChatSession = {
   id: string
   title: string
+  /** 置顶后始终排在对话列表最前 */
+  pinned?: boolean
   /** 本对话已选入的组件清单（角色 / 世界卡 / 人设 / 规则） */
   mounts: MountedComponent[]
+  /** 本对话选用的“我的出发视角”角色卡 ID；该角色不作为 AI 角色发言 */
+  userCharacterId?: string
   /** 本对话专属剧情便签（Author's Note） */
   authorsNote: string
   /** 剧情便签注入深度（倒数第几条消息之前，默认 4） */
@@ -234,6 +252,8 @@ export type ChatSession = {
   multiCharMode: MultiCharMode
   /** 当前指向的活跃叶节点消息 ID，用于分支 / Swipe 切换 */
   activeLeafId: string | null
+  /** 本对话的上下文压缩检查点；原始消息始终完整保留 */
+  contextCheckpoints?: ContextCheckpoint[]
   /** 会话级模型覆盖（空则跟随全局设置） */
   modelOverride?: {
     providerId: string
@@ -249,7 +269,7 @@ export type LlmChatMessage = {
   content: string
   /** 用于 UI 上下文透视弹窗标注来源区块 */
   sourceLabel?: string
-  sourceKind?: 'rule' | 'character' | 'world' | 'persona' | 'note' | 'history' | 'example'
+  sourceKind?: 'rule' | 'character' | 'world' | 'persona' | 'note' | 'history' | 'example' | 'memory'
   tokens?: number
 }
 

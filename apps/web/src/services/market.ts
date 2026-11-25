@@ -66,6 +66,33 @@ const friendlyError = (err: unknown): string => {
   return message
 }
 
+const BLOCKED_MARKET_TERMS = [
+  '轮奸', '强奸', '迷奸', '性奴', '肉便器', '调教', '乱伦', '兽交', '淫', '色情',
+  '情色', '做爱', '性交', '口交', '肛交', '露出', '痴汉', '援交', '卖淫', '嫖娼',
+  '强暴', '未成年', '萝莉', '正太', '幼女', '幼男', '成人向', '里番', '黄文', '黄色',
+  'r18', '18+', 'bdsm', '裸体', '裸照', '裸聊', '性欲', '性爱', '发情', '群交',
+  '轮交', '迷药', '春药', '凌辱', '性虐', '触手', '产卵', '洗脑', '催眠', '恶堕',
+  '雌堕', '母猪', '母狗', '肉棒', '肉穴', '下体', '乳头', '母乳', '乳汁', '榨干',
+  '榨取', '骚货', '骚逼', 'rbq',
+]
+
+const BLOCKED_MARKET_WORDS = [
+  'rape', 'gangbang', 'orgy', 'hentai', 'nsfw', 'explicit', 'incest', 'loli', 'shota',
+  'underage', 'noncon', 'molest', 'prostitut', 'brothel', 'blowjob', 'anal', 'fuck',
+  'cum', 'sex', 'sexual', 'erotic', 'porn', 'nude', 'naked', 'bondage', 'fetish',
+  'milf', 'dick', 'cock', 'penis', 'vagina', 'xxx', 'lewd', 'ecchi', 'futanari',
+  'slut', 'whore', 'breeding',
+]
+
+const isBlockedMarketContent = (...parts: Array<string | undefined>): boolean => {
+  const text = parts
+    .filter((part): part is string => Boolean(part))
+    .join(' ')
+    .toLocaleLowerCase()
+  if (BLOCKED_MARKET_TERMS.some((term) => text.includes(term))) return true
+  return BLOCKED_MARKET_WORDS.some((word) => new RegExp(`\\b${word}\\b`, 'i').test(text))
+}
+
 const decodeBase64 = (value: string): Uint8Array => {
   const binary = atob(value)
   const bytes = new Uint8Array(binary.length)
@@ -100,14 +127,20 @@ const nativeGet = async (
       Accept: acceptFor(mode),
       ...(cookie ? { Cookie: cookie } : {}),
       ...(url.startsWith('https://chat.xstavern.com/')
-        ? { Referer: 'https://chat.xstavern.com/' }
+        ? { Referer: 'https://chat.xstavern.com/', Origin: 'https://chat.xstavern.com' }
         : {}),
     },
   })
   if (response.status < 200 || response.status >= 300) {
     throw new Error('来源返回 HTTP ' + response.status)
   }
-  return mode === 'bytes' ? toBytes(response.data) : String(response.data ?? '')
+  if (mode === 'bytes') return toBytes(response.data)
+  // 部分 Android 版本即使 responseType=text 也会把 JSON 自动解析成对象或字节数组。
+  if (typeof response.data === 'string') return response.data
+  if (Array.isArray(response.data)) {
+    return new TextDecoder().decode(Uint8Array.from(response.data as number[]))
+  }
+  return JSON.stringify(response.data ?? '')
 }
 
 const gatewayGet = async (
@@ -156,7 +189,17 @@ const requestSource = async (
   cookie?: string
 ): Promise<string | Uint8Array> => {
   try {
-    if (Capacitor.isNativePlatform()) return await nativeGet(url, mode, cookie)
+    if (Capacitor.isNativePlatform()) {
+      let lastError: unknown
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          return await nativeGet(url, mode, cookie)
+        } catch (err) {
+          lastError = err
+        }
+      }
+      throw lastError ?? new Error('来源请求失败')
+    }
     if (allowGateway) {
       const gateway = await resolveGatewayOrigin(customOrigin)
       if (gateway !== null) return await gatewayGet(gateway, url, mode)
@@ -242,7 +285,9 @@ const parseBae = (plugin: MarketplacePlugin, html: string): MarketCard[] => {
       licenseUrl: plugin.homepage,
     })
   }
-  return cards
+  return cards.filter(
+    (card) => !isBlockedMarketContent(card.name, card.description, card.tags.join(' '))
+  )
 }
 
 const parseTuniang = (plugin: MarketplacePlugin, html: string): MarketCard[] => {
@@ -286,7 +331,9 @@ const parseTuniang = (plugin: MarketplacePlugin, html: string): MarketCard[] => 
       licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
     })
   }
-  return cards
+  return cards.filter(
+    (card) => !isBlockedMarketContent(card.name, card.description, card.tags.join(' '))
+  )
 }
 
 const nativeCookieKey = (pluginId: string): string => `tavern.market.cookie.${pluginId}`
@@ -313,6 +360,13 @@ const mapPixelCard = (
     : []
   const summary = typeof raw.summary === 'string' ? raw.summary.trim() : ''
   const description = typeof raw.description === 'string' ? raw.description.trim() : ''
+  const series = typeof raw.series === 'string' && raw.series ? raw.series : ''
+  const category = typeof raw.category === 'string' && raw.category ? raw.category : ''
+  if (
+    isBlockedMarketContent(name, summary, description, tags.join(' '), series, category)
+  ) {
+    return null
+  }
   return {
     id: plugin.id + ':' + slug,
     pluginId: plugin.id,
@@ -337,8 +391,8 @@ const mapPixelCard = (
     tags,
     license: '以站点与作者说明为准',
     licenseUrl: 'https://chat.xstavern.com/market',
-    series: typeof raw.series === 'string' && raw.series ? raw.series : undefined,
-    category: typeof raw.category === 'string' && raw.category ? raw.category : undefined,
+    series: series || undefined,
+    category: category || undefined,
     downloadCount: typeof raw.download_count === 'number' ? raw.download_count : undefined,
     rating: typeof raw.avg_rating === 'number' ? raw.avg_rating : undefined,
     ratingCount: typeof raw.rating_count === 'number' ? raw.rating_count : undefined,
@@ -439,6 +493,10 @@ const loadPixelResources = async (
         typeof raw.file_name === 'string' && raw.file_name ? raw.file_name : `${title}.json`
       const description = typeof raw.description === 'string' ? raw.description : ''
       const collection = typeof raw.collection === 'string' ? raw.collection : ''
+      const tags = Array.isArray(raw.tags)
+        ? raw.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 12)
+        : []
+      if (isBlockedMarketContent(title, description, collection, tags.join(' '))) continue
       cards.push({
         id: plugin.id + ':' + id,
         pluginId: plugin.id,
@@ -451,9 +509,7 @@ const loadPixelResources = async (
         sourceUrl: `https://chat.xstavern.com/market/resources?search=${encodeURIComponent(title)}`,
         downloadUrl: `${PIXEL_TAVERN_RESOURCES}/${encodeURIComponent(id)}/download`,
         fileName,
-        tags: Array.isArray(raw.tags)
-          ? raw.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 12)
-          : [],
+        tags,
         license: '以站点与作者说明为准',
         licenseUrl: 'https://chat.xstavern.com/market/resources',
         category: collection || undefined,
@@ -684,11 +740,21 @@ export async function loadMarketCards(
   if (plugin.error) throw new Error(plugin.error)
 
   if (plugin.manifest) {
-    return plugin.manifest.cards.map((card) => ({
-      ...card,
-      pluginId: plugin.manifest!.id,
-      pluginName: plugin.manifest!.name,
-    }))
+    return plugin.manifest.cards
+      .filter(
+        (card) =>
+          !isBlockedMarketContent(
+            card.name,
+            card.description,
+            card.summary,
+            card.tags.join(' ')
+          )
+      )
+      .map((card) => ({
+        ...card,
+        pluginId: plugin.manifest!.id,
+        pluginName: plugin.manifest!.name,
+      }))
   }
 
   const cachedKey = plugin.id

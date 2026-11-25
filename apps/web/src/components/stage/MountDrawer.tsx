@@ -2,7 +2,6 @@ import clsx from 'clsx'
 import { useRef, useState } from 'react'
 import {
   createEmptyCharacter,
-  createEmptyPersona,
   createEmptyRule,
   createEmptyWorld,
   type CharacterComponent,
@@ -48,13 +47,6 @@ const CATEGORY_META: Array<{
     shortLabel: '世界',
     dotClass: styles.dotWorld,
     mountedClass: styles.cardMountedWorld,
-  },
-  {
-    kind: 'persona',
-    label: '人设卡',
-    shortLabel: '人设',
-    dotClass: styles.dotPersona,
-    mountedClass: styles.cardMountedPersona,
   },
   {
     kind: 'rule',
@@ -103,6 +95,8 @@ const DrawerContent = () => {
   const toggleWorldEntryOverride = useAppStore((s) => s.toggleWorldEntryOverride)
   const updateAuthorsNote = useAppStore((s) => s.updateAuthorsNote)
   const setMultiCharMode = useAppStore((s) => s.setMultiCharMode)
+  const setUserCharacter = useAppStore((s) => s.setUserCharacter)
+  const clearContextCheckpoints = useAppStore((s) => s.clearContextCheckpoints)
   const insertCharacterGreeting = useAppStore((s) => s.insertCharacterGreeting)
   const importFiles = useAppStore((s) => s.importFiles)
 
@@ -110,9 +104,14 @@ const DrawerContent = () => {
   if (!session) return null
 
   const mountByCompId = new Map(session.mounts.map((m) => [m.componentId, m]))
-  const totalActive = session.mounts.filter((m) => m.enabled).length
+  const totalActive =
+    session.mounts.filter((m) => m.enabled).length + (session.userCharacterId ? 1 : 0)
   const mountedCharCount = session.mounts.filter((m) => m.kind === 'character' && m.enabled).length
   const query = search.trim().toLowerCase()
+  const povCharacters = components
+    .filter((c) => c.kind === 'character')
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
+  const povCharacter = povCharacters.find((c) => c.id === session.userCharacterId)
 
   const visibleCategories =
     filterKind === 'all'
@@ -125,9 +124,7 @@ const DrawerContent = () => {
         ? createEmptyCharacter()
         : kind === 'world'
           ? createEmptyWorld()
-          : kind === 'persona'
-            ? createEmptyPersona()
-            : createEmptyRule()
+          : createEmptyRule()
     await upsertComponent(item)
     openLibrary(kind, item.id)
   }
@@ -181,7 +178,7 @@ const DrawerContent = () => {
           </span>
           <input
             className={styles.searchInput}
-            placeholder="筛选角色、世界卡、人设、规则…"
+            placeholder="筛选角色、世界卡、规则…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -216,6 +213,30 @@ const DrawerContent = () => {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className={styles.povBox}>
+        <div className={styles.povText}>
+          <span className={styles.povTitle}>我的出发视角</span>
+          <span className={styles.povHint}>选一个角色卡，以该角色的身份和称呼参与对话</span>
+        </div>
+        <select
+          className={styles.povSelect}
+          value={povCharacter?.id ?? ''}
+          onChange={(event) => void setUserCharacter(event.target.value || null)}
+        >
+          <option value="">默认用户（不指定角色）</option>
+          {povCharacters.map((character) => (
+            <option key={character.id} value={character.id}>
+              {character.name}
+            </option>
+          ))}
+        </select>
+        {povCharacter ? (
+          <span className={styles.povActive}>
+            当前以「{povCharacter.name}」的身份参与，该角色不会作为 AI 角色发言。
+          </span>
+        ) : null}
       </div>
 
       <div className={styles.body}>
@@ -297,6 +318,8 @@ const DrawerContent = () => {
                       const mount = mountByCompId.get(item.id)
                       const isMounted = Boolean(mount)
                       const isPaused = Boolean(mount && !mount.enabled)
+                      const isPov =
+                        item.kind === 'character' && session.userCharacterId === item.id
                       const desc =
                         item.kind === 'character'
                           ? (item as CharacterComponent).payload.description || '角色设定'
@@ -311,7 +334,8 @@ const DrawerContent = () => {
                             styles.card,
                             isMounted && styles.cardMounted,
                             isMounted && cat.mountedClass,
-                            isPaused && styles.cardPaused
+                            isPaused && styles.cardPaused,
+                            isPov && styles.cardPov
                           )}
                         >
                           <div className={styles.cardRow}>
@@ -335,7 +359,7 @@ const DrawerContent = () => {
                             <div
                               className={styles.cardInfo}
                               onClick={() =>
-                                isMounted
+                                isMounted || isPov
                                   ? openLibrary(item.kind, item.id)
                                   : void toggleMountComponent(item.id)
                               }
@@ -353,7 +377,9 @@ const DrawerContent = () => {
                               >
                                 <IconEdit size={13} />
                               </button>
-                              {isMounted ? (
+                              {isPov ? (
+                                <span className={styles.povBadge}>我的视角</span>
+                              ) : isMounted ? (
                                 <button
                                   type="button"
                                   className={styles.removeChip}
@@ -523,6 +549,25 @@ const DrawerContent = () => {
             onChange={(e) => void updateAuthorsNote(e.target.value)}
           />
         </div>
+
+        {session.contextCheckpoints?.length ? (
+          <div className={styles.noteBox}>
+            <div className={styles.sectionLabel}>
+              <span>上下文记忆</span>
+              <button
+                type="button"
+                className={styles.smallBtn}
+                onClick={() => void clearContextCheckpoints(session.id)}
+              >
+                清除
+              </button>
+            </div>
+            <div className={styles.povHint}>
+              已把 {session.contextCheckpoints.at(-1)?.coveredRounds ?? 0} 轮早期对话压缩成结构化记忆；
+              原始消息仍保留在本地。
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className={styles.footer}>
@@ -532,7 +577,7 @@ const DrawerContent = () => {
           onClick={() => openLibrary(filterKind)}
         >
           <IconLayers size={14} />
-          <span>打开完整组件库</span>
+          <span>打开完整卡牌库</span>
         </button>
       </div>
     </>

@@ -20,7 +20,7 @@ type Props = {
   onRemove: (card: MarketCard) => void
 }
 
-const KIND_LABELS = { character: '角色', world: '世界', rule: '规则' } as const
+const KIND_LABELS = { character: '角色卡', world: '世界书', rule: '规则' } as const
 
 const Preview = ({ url }: { url?: string }) => {
   const [failed, setFailed] = useState(false)
@@ -139,7 +139,7 @@ export const MarketDetailModal = ({
                 className={styles.removeBtn}
                 onClick={() => onRemove(card)}
               >
-                <IconTrash size={13} /> 从素材库移除
+                <IconTrash size={13} /> 从卡牌库移除
               </button>
             ) : (
               <button
@@ -152,7 +152,7 @@ export const MarketDetailModal = ({
                   '下载中…'
                 ) : (
                   <>
-                    <IconDownload size={14} /> 下载到素材库
+                    <IconDownload size={14} /> 下载到卡牌库
                   </>
                 )}
               </button>

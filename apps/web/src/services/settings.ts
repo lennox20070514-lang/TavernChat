@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { ContextCompressionMode } from '@tavern-chat/core'
 
 export type ProviderFormat = 'openai' | 'anthropic' | 'ollama'
 export type ThemeMode = 'system' | 'light' | 'dark'
@@ -96,6 +97,8 @@ export type SettingsState = {
   activeProviderId: string
   defaultMaxContextTokens: number
   defaultMaxResponseTokens: number
+  /** 上下文压缩：关闭 / 均衡 / 长记忆 */
+  contextCompression: ContextCompressionMode
   autoInsertGreeting: boolean
   /** 可选自定义远端/局域网网关地址（如手机连接电脑桌面端网关） */
   customGatewayOrigin: string
@@ -146,6 +149,7 @@ function loadSettings(): SettingsState {
     activeProviderId: DEFAULT_PROVIDERS[0]!.id,
     defaultMaxContextTokens: 32768,
     defaultMaxResponseTokens: 2048,
+    contextCompression: 'balanced',
     autoInsertGreeting: true,
     customGatewayOrigin: '',
   }
@@ -205,6 +209,7 @@ type SettingsActions = {
         SettingsState,
         | 'defaultMaxContextTokens'
         | 'defaultMaxResponseTokens'
+        | 'contextCompression'
         | 'autoInsertGreeting'
         | 'customGatewayOrigin'
       >
@@ -264,6 +269,7 @@ function extractData(s: SettingsState & SettingsActions): SettingsState {
     activeProviderId: s.activeProviderId,
     defaultMaxContextTokens: s.defaultMaxContextTokens,
     defaultMaxResponseTokens: s.defaultMaxResponseTokens,
+    contextCompression: s.contextCompression,
     autoInsertGreeting: s.autoInsertGreeting,
     customGatewayOrigin: s.customGatewayOrigin,
   }

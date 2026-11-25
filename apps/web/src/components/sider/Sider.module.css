@@ -161,6 +161,47 @@
   gap: 2px;
 }
 
+.multiBar {
+  margin: 0 12px 5px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  font-size: 11.5px;
+}
+
+.multiCount {
+  margin-right: auto;
+  color: var(--text-secondary);
+}
+
+.multiAction,
+.multiDanger {
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.multiAction:hover {
+  color: var(--text-primary);
+}
+
+.multiDanger {
+  color: var(--danger);
+}
+
+.multiDanger:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .sessionItem {
   position: relative;
   display: flex;
@@ -171,6 +212,7 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text-secondary);
+  touch-action: pan-y;
   transition: background 0.12s, color 0.12s;
 }
 
@@ -185,6 +227,32 @@
   font-weight: 500;
 }
 
+.sessionSelecting {
+  padding-left: 9px;
+}
+
+.sessionSelected {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.checkbox {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-contrast, #fff);
+}
+
+.checkboxOn {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
 .sessionMain {
   flex: 1;
   min-width: 0;
@@ -193,7 +261,20 @@
   gap: 2px;
 }
 
+.sessionTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pinMark {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
 .sessionTitle {
+  min-width: 0;
   font-size: 13.5px;
   white-space: nowrap;
   overflow: hidden;
@@ -208,7 +289,7 @@
   text-overflow: ellipsis;
 }
 
-.deleteBtn {
+.moreBtn {
   opacity: 0;
   width: 24px;
   height: 24px;
@@ -220,16 +301,146 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  cursor: pointer;
 }
 
-.sessionItem:hover .deleteBtn,
-.sessionActive .deleteBtn {
+.sessionItem:hover .moreBtn,
+.sessionActive .moreBtn {
   opacity: 1;
 }
 
-.deleteBtn:hover {
-  background: var(--danger-soft);
+.moreBtn:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+@media (hover: none) {
+  .moreBtn {
+    opacity: 1;
+  }
+}
+
+.menuOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: transparent;
+}
+
+.menuCard {
+  position: fixed;
+  width: 188px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 12px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+  animation: menuIn 0.14s ease;
+}
+
+@keyframes menuIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.menuItem {
+  height: 38px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuItem:hover {
+  background: var(--bg-hover);
+}
+
+.menuSeparator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-subtle);
+}
+
+.menuDanger {
   color: var(--danger);
+}
+
+.renameBody {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.renameInput {
+  height: 38px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+}
+
+.renameInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.renameActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.renameCancel,
+.renameSave {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.renameCancel {
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.renameCancel:hover {
+  background: var(--bg-hover);
+}
+
+.renameSave {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-weight: 600;
+}
+
+.renameSave:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .footer {
@@ -281,6 +492,14 @@
   background: rgba(15, 23, 42, 0.36);
   backdrop-filter: blur(2px);
   display: flex;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.24s ease;
+}
+
+.mobileMaskOpen {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .mobileDrawer {
@@ -289,4 +508,11 @@
   box-shadow: var(--shadow-lg);
   background: var(--bg-subtle);
   padding: var(--sat) 0 var(--sab) var(--sal);
+  transform: translateX(-102%);
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.mobileDrawerOpen {
+  transform: translateX(0);
 }

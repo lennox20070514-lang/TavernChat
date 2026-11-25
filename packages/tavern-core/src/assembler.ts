@@ -1,6 +1,7 @@
 import { substituteMacros, type MacroContext } from './macros.ts'
 import { applyRegexScripts } from './regex.ts'
 import { estimateMessageTokens } from './token.ts'
+import { buildContextMemoryBlock } from './compaction.ts'
 import type {
   AssembledPrompt,
   CharacterComponent,
@@ -28,6 +29,8 @@ export type AssembleOptions = {
   defaultMaxContextTokens?: number
   /** 全局默认最大回复 Token */
   defaultMaxResponseTokens?: number
+  /** 已压缩的早期历史长期记忆（存在检查点时注入） */
+  contextSummary?: string
   /** 若为继续生成（Continue）模式，追加温和引导 */
   mode?: 'normal' | 'continue' | 'impersonate'
   /** 可选固定时间/随机数（用于单元测试） */
@@ -61,6 +64,15 @@ function buildCharacterBlock(char: CharacterComponent, macro: MacroContext): str
   return parts.join('\n')
 }
 
+function buildUserPovBlock(char: CharacterComponent): string {
+  const p = char.payload
+  const parts: string[] = []
+  if (p.description.trim()) parts.push(p.description.trim())
+  if (p.personality.trim()) parts.push(`性格特点：${p.personality.trim()}`)
+  if (p.scenario.trim()) parts.push(`当前处境：${p.scenario.trim()}`)
+  return parts.join('\n')
+}
+
 function parseExampleDialogue(raw: string, macro: MacroContext): LlmChatMessage[] {
   const text = substituteMacros(raw.trim(), macro)
   if (!text) return []
@@ -91,6 +103,12 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
     .filter((m) => m.enabled)
     .sort((a, b) => a.order - b.order)
 
+  const povComponent = options.session.userCharacterId
+    ? componentMap.get(options.session.userCharacterId)
+    : undefined
+  const povCharacter =
+    povComponent?.kind === 'character' ? (povComponent as CharacterComponent) : undefined
+
   const characters: CharacterComponent[] = []
   const worlds: Array<{ world: WorldComponent; disabledEntryIds?: Set<string> }> = []
   const personas: PersonaComponent[] = []
@@ -100,6 +118,7 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
     const item = componentMap.get(mount.componentId)
     if (!item) continue
     if (item.kind === 'character') {
+      if (item.id === options.session.userCharacterId) continue
       characters.push(item as CharacterComponent)
     } else if (item.kind === 'world') {
       worlds.push({
@@ -117,7 +136,12 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   }
 
   const activePersona = personas[0]
-  const activeUserName = activePersona?.payload.displayName?.trim() || activePersona?.name || '用户'
+  const povBlock = povCharacter ? buildUserPovBlock(povCharacter) : ''
+  const activeUserName =
+    povCharacter?.name ||
+    activePersona?.payload.displayName?.trim() ||
+    activePersona?.name ||
+    '用户'
 
   const targetChar =
     (options.nextSpeakerId
@@ -141,7 +165,7 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   const macroCtx: MacroContext = {
     charName: activeCharName,
     userName: activeUserName,
-    persona: activePersona?.payload.description ?? '',
+    persona: povBlock || activePersona?.payload.description || '',
     scenario: mergedScenario,
     groupNames,
     lastMessage: lastMsg,
@@ -260,18 +284,35 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   }
 
   const personaMsgs: LlmChatMessage[] = []
-  if (activePersona) {
-    const desc = substituteMacros(activePersona.payload.description.trim(), macroCtx)
+  if (povCharacter || activePersona) {
+    const rawDescription = povCharacter
+      ? povBlock
+      : activePersona?.payload.description.trim() ?? ''
+    const desc = substituteMacros(rawDescription, macroCtx)
     const content = desc
       ? `用户身份（${activeUserName}）：\n${desc}`
       : `用户称呼：${activeUserName}`
     personaMsgs.push({
       role: 'system',
       content,
-      sourceLabel: `人设 · ${activePersona.name}`,
+      sourceLabel: povCharacter ? `用户视角 · ${povCharacter.name}` : `人设 · ${activePersona!.name}`,
       sourceKind: 'persona',
       tokens: estimateMessageTokens(content),
     })
+  }
+
+  const memoryMsgs: LlmChatMessage[] = []
+  if (options.contextSummary?.trim()) {
+    const memory = buildContextMemoryBlock(options.contextSummary)
+    if (memory) {
+      memoryMsgs.push({
+        role: 'system',
+        content: memory,
+        sourceLabel: '上下文记忆',
+        sourceKind: 'memory',
+        tokens: estimateMessageTokens(memory),
+      })
+    }
   }
 
   const worldAfterMsgs: LlmChatMessage[] = worldScan.afterChar.map((w) => {
@@ -439,6 +480,9 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
   for (const inj of depthInjections) {
     fixedTokens += inj.msg.tokens ?? estimateMessageTokens(inj.msg.content)
   }
+  for (const memory of memoryMsgs) {
+    fixedTokens += memory.tokens ?? estimateMessageTokens(memory.content)
+  }
 
   const availableForHistory = Math.max(
     512,
@@ -492,14 +536,19 @@ export function assemblePrompt(options: AssembleOptions): AssembledPrompt {
     historyWithInjections.splice(insertIdx, 0, inj.msg)
   }
 
-  // 按 promptOrder 拼装最终消息序列
+  // 按 promptOrder 拼装最终消息序列；上下文记忆固定在历史之前，不改动前面的静态前缀。
   const finalMessages: LlmChatMessage[] = []
+  let memoryInserted = false
   for (const slot of promptOrder) {
     if (slot === 'chat_history') {
-      finalMessages.push(...historyWithInjections)
+      finalMessages.push(...memoryMsgs, ...historyWithInjections)
+      memoryInserted = true
     } else {
       finalMessages.push(...fixedBlocksMap[slot])
     }
+  }
+  if (!memoryInserted && memoryMsgs.length > 0) {
+    finalMessages.push(...memoryMsgs)
   }
 
   const totalTokens = finalMessages.reduce(

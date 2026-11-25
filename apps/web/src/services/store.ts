@@ -1,6 +1,9 @@
 import {
   assemblePrompt,
   createBuiltinRulePresets,
+  findActiveCheckpoint,
+  planCompaction,
+  resolveCompactionBudget,
   smartImportFile,
   substituteMacros,
   type AssembledPrompt,
@@ -9,11 +12,13 @@ import {
   type ChatSession,
   type ComponentItem,
   type ComponentKind,
+  type ContextCheckpoint,
   type MountedComponent,
   type MultiCharMode,
   type PersonaComponent,
 } from '@tavern-chat/core'
 import { create } from 'zustand'
+import { runCompaction } from './contextCompaction.ts'
 import { streamChatCompletion } from './llm/client.ts'
 import { getActiveProvider, useSettings } from './settings.ts'
 import { storage } from './storage/indexedDbAdapter.ts'
@@ -43,6 +48,24 @@ export function resolveActivePath(
     cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined
   }
   return chain
+}
+
+function resolveContextView(
+  session: ChatSession,
+  allMessages: ChatMessage[],
+  leafId: string | null
+): {
+  path: ChatMessage[]
+  history: ChatMessage[]
+  checkpoint: ContextCheckpoint | null
+} {
+  const path = leafId ? resolveActivePath(allMessages, leafId) : []
+  const active = findActiveCheckpoint(path, session.contextCheckpoints)
+  return {
+    path,
+    history: active ? path.slice(active.anchorIndex + 1) : path,
+    checkpoint: active?.checkpoint ?? null,
+  }
 }
 
 /**
@@ -91,6 +114,7 @@ type AppStoreState = {
   activeSessionId: string | null
   messagesBySession: Record<string, ChatMessage[]>
   streamingBySession: Record<string, { messageId: string; controller: AbortController }>
+  compactingBySession: Record<string, { chunk: number; total: number }>
   toast: ToastMessage | null
 
   // UI 面板开关
@@ -130,7 +154,9 @@ type AppStoreState = {
   createSession: (initialMounts?: MountedComponent[], title?: string) => Promise<ChatSession>
   selectSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
+  setSessionPinned: (id: string, pinned: boolean) => Promise<void>
   deleteSession: (id: string) => Promise<void>
+  clearContextCheckpoints: (sessionId?: string) => Promise<void>
 
   // 对话组件自由选入 / 选出
   toggleMountComponent: (componentId: string) => Promise<void>
@@ -139,6 +165,7 @@ type AppStoreState = {
   toggleWorldEntryOverride: (worldComponentId: string, entryId: string) => Promise<void>
   updateAuthorsNote: (note: string, depth?: number) => Promise<void>
   setMultiCharMode: (mode: MultiCharMode) => Promise<void>
+  setUserCharacter: (characterId: string | null) => Promise<void>
   insertCharacterGreeting: (characterId: string, greetingIndex?: number) => Promise<void>
 
   // 对话发送 / 流式 / 分支操作
@@ -166,6 +193,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   activeSessionId: null,
   messagesBySession: {},
   streamingBySession: {},
+  compactingBySession: {},
   toast: null,
 
   marketOpen: false,
@@ -286,13 +314,15 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   deleteComponent: async (id) => {
     await storage.deleteComponent(id)
-    // 同步从所有会话的挂载中清理
+    // 同步从所有会话的挂载与出发视角中清理
     const nextSessions: ChatSession[] = []
     for (const s of get().sessions) {
-      if (s.mounts.some((m) => m.componentId === id)) {
+      const isPov = s.userCharacterId === id
+      if (s.mounts.some((m) => m.componentId === id) || isPov) {
         const cleaned = {
           ...s,
           mounts: s.mounts.filter((m) => m.componentId !== id),
+          ...(isPov ? { userCharacterId: undefined } : {}),
           updatedAt: Date.now(),
         }
         await storage.upsertSession(cleaned)
@@ -361,6 +391,16 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     }))
   },
 
+  setSessionPinned: async (id, pinned) => {
+    const session = get().sessions.find((s) => s.id === id)
+    if (!session) return
+    const updated = { ...session, pinned, updatedAt: Date.now() }
+    await storage.upsertSession(updated)
+    set((state) => ({
+      sessions: state.sessions.map((s) => (s.id === id ? updated : s)),
+    }))
+  },
+
   deleteSession: async (id) => {
     get().stopStreaming(id)
     await storage.deleteSession(id)
@@ -386,6 +426,24 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         messagesBySession: { ...state.messagesBySession, [nextActive]: msgs },
       }))
     }
+  },
+
+  clearContextCheckpoints: async (sessionId) => {
+    const state = get()
+    const targetId = sessionId ?? state.activeSessionId
+    if (!targetId) return
+    const session = state.sessions.find((s) => s.id === targetId)
+    if (!session || !session.contextCheckpoints?.length) return
+    const updated: ChatSession = {
+      ...session,
+      contextCheckpoints: undefined,
+      updatedAt: Date.now(),
+    }
+    await storage.upsertSession(updated)
+    set((s) => ({
+      sessions: s.sessions.map((item) => (item.id === updated.id ? updated : item)),
+    }))
+    get().showToast('已清除上下文记忆，后续将重新使用完整历史', 'info')
   },
 
   toggleMountComponent: async (componentId) => {
@@ -423,6 +481,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const updated: ChatSession = {
       ...session,
       mounts: nextMounts,
+      userCharacterId:
+        justAdded && comp.kind === 'character' && session.userCharacterId === comp.id
+          ? undefined
+          : session.userCharacterId,
       updatedAt: Date.now(),
     }
     await storage.upsertSession(updated)
@@ -524,6 +586,28 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     }))
   },
 
+  setUserCharacter: async (characterId) => {
+    const state = get()
+    const session = state.sessions.find((s) => s.id === state.activeSessionId)
+    if (!session) return
+    const character = characterId
+      ? state.components.find((c) => c.id === characterId && c.kind === 'character')
+      : undefined
+    if (characterId && !character) return
+    const updated: ChatSession = {
+      ...session,
+      userCharacterId: character ? character.id : undefined,
+      mounts: character
+        ? session.mounts.filter((m) => m.componentId !== character.id)
+        : session.mounts,
+      updatedAt: Date.now(),
+    }
+    await storage.upsertSession(updated)
+    set((s) => ({
+      sessions: s.sessions.map((item) => (item.id === updated.id ? updated : item)),
+    }))
+  },
+
   insertCharacterGreeting: async (characterId, greetingIndex = 0) => {
     const state = get()
     const session = state.sessions.find((s) => s.id === state.activeSessionId)
@@ -538,18 +622,32 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const raw = greetings[greetingIndex] ?? greetings[0]
     if (!raw) return
 
+    const pov = session.userCharacterId
+      ? (state.components.find(
+          (c) => c.id === session.userCharacterId && c.kind === 'character'
+        ) as CharacterComponent | undefined)
+      : undefined
     const personaMount = session.mounts.find((m) => m.kind === 'persona' && m.enabled)
     const persona = personaMount
       ? (state.components.find((c) => c.id === personaMount.componentId) as
           | PersonaComponent
           | undefined)
       : undefined
-    const userName = persona?.payload.displayName?.trim() || persona?.name || '用户'
+    const userName = pov?.name || persona?.payload.displayName?.trim() || persona?.name || '用户'
+    const personaText = pov
+      ? [
+          pov.payload.description.trim(),
+          pov.payload.personality.trim() ? `性格特点：${pov.payload.personality.trim()}` : '',
+          pov.payload.scenario.trim() ? `当前处境：${pov.payload.scenario.trim()}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : persona?.payload.description ?? ''
 
     const rendered = substituteMacros(raw, {
       charName: comp.name,
       userName,
-      persona: persona?.payload.description ?? '',
+      persona: personaText,
       scenario: comp.payload.scenario,
     })
 
@@ -592,15 +690,16 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const session = state.sessions.find((s) => s.id === state.activeSessionId)
     if (!session) return null
     const allMsgs = state.messagesBySession[session.id] ?? []
-    const history = resolveActivePath(allMsgs, session.activeLeafId)
+    const view = resolveContextView(session, allMsgs, session.activeLeafId)
     const settings = useSettings.getState()
     return assemblePrompt({
       session,
-      history,
+      history: view.history,
       components: state.components,
       nextSpeakerId,
       defaultMaxContextTokens: settings.defaultMaxContextTokens,
       defaultMaxResponseTokens: settings.defaultMaxResponseTokens,
+      contextSummary: view.checkpoint?.summary,
     })
   },
 
@@ -623,7 +722,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const state = get()
     const session = state.sessions.find((s) => s.id === state.activeSessionId)
     if (!session) return
-    if (state.streamingBySession[session.id]) return
+    if (state.streamingBySession[session.id] || state.compactingBySession[session.id]) return
 
     const existing = state.messagesBySession[session.id] ?? []
     let parentId = session.activeLeafId
@@ -673,6 +772,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const state = get()
     const session = state.sessions.find((s) => s.id === state.activeSessionId)
     if (!session) return
+    if (state.compactingBySession[session.id]) return
     const allMsgs = state.messagesBySession[session.id] ?? []
     const target = allMsgs.find((m) => m.id === messageId)
     if (!target || target.role !== 'assistant') return
@@ -688,6 +788,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const state = get()
     const session = state.sessions.find((s) => s.id === state.activeSessionId)
     if (!session) return
+    if (state.compactingBySession[session.id]) return
     const allMsgs = state.messagesBySession[session.id] ?? []
     const path = resolveActivePath(allMsgs, session.activeLeafId)
     const last = path.at(-1)
@@ -904,7 +1005,8 @@ async function generateAssistantReply(
   const provider = getActiveProvider(settings)
 
   const allMsgs = state.messagesBySession[sessionId] ?? []
-  const history = parentId ? resolveActivePath(allMsgs, parentId) : []
+  const initialView = resolveContextView(session, allMsgs, parentId)
+  let workingSession = session
 
   // 计算发言角色（单角色默认首位，多角色按模式选择）
   const activeChars = session.mounts
@@ -919,22 +1021,106 @@ async function generateAssistantReply(
   } else if (activeChars.length === 1) {
     speaker = activeChars[0]
   } else if (activeChars.length > 1 && session.multiCharMode === 'round_robin') {
-    const lastAi = [...history].reverse().find((m) => m.role === 'assistant' && m.speakerId)
+    const lastAi = [...initialView.path].reverse().find((m) => m.role === 'assistant' && m.speakerId)
     const lastIdx = lastAi ? activeChars.findIndex((c) => c.id === lastAi.speakerId) : -1
     speaker = activeChars[(lastIdx + 1) % activeChars.length]
   } else if (activeChars.length > 1 && session.multiCharMode === 'manual') {
     speaker = activeChars[0]
   }
 
-  const assembled = assemblePrompt({
-    session,
-    history,
+  let assembled = assemblePrompt({
+    session: workingSession,
+    history: initialView.history,
     components: state.components,
     nextSpeakerId: speaker?.id,
     defaultMaxContextTokens: settings.defaultMaxContextTokens,
     defaultMaxResponseTokens: settings.defaultMaxResponseTokens,
+    contextSummary: initialView.checkpoint?.summary,
     mode: options.mode,
   })
+
+  if (settings.contextCompression !== 'off') {
+    const budget = resolveCompactionBudget(
+      assembled.maxContextTokens,
+      settings.contextCompression
+    )
+    const needsCompaction =
+      assembled.droppedHistoryCount > 0 || assembled.totalTokens >= budget.triggerTokens
+    if (needsCompaction) {
+      const plan = planCompaction({
+        history: initialView.path,
+        activeCheckpoint: initialView.checkpoint,
+        budget,
+        estimatedTokens: assembled.totalTokens,
+        force: assembled.droppedHistoryCount > 0,
+      })
+      if (plan) {
+        try {
+          set((s) => ({
+            compactingBySession: {
+              ...s.compactingBySession,
+              [sessionId]: { chunk: 1, total: plan.chunks.length },
+            },
+          }))
+          get().showToast('正在整理早期对话的上下文记忆…', 'info')
+          const checkpoint = await runCompaction({
+            plan,
+            provider,
+            budget,
+            customGatewayOrigin: settings.customGatewayOrigin,
+            onProgress: (chunk, total) =>
+              set((s) => ({
+                compactingBySession: {
+                  ...s.compactingBySession,
+                  [sessionId]: { chunk, total },
+                },
+              })),
+          })
+          const checkpoints = [
+            ...(workingSession.contextCheckpoints ?? []),
+            checkpoint,
+          ].slice(-8)
+          workingSession = {
+            ...workingSession,
+            contextCheckpoints: checkpoints,
+            updatedAt: Date.now(),
+          }
+          await storage.upsertSession(workingSession)
+          set((s) => ({
+            sessions: s.sessions.map((item) =>
+              item.id === workingSession.id ? workingSession : item
+            ),
+          }))
+
+          const view = resolveContextView(workingSession, allMsgs, parentId)
+          assembled = assemblePrompt({
+            session: workingSession,
+            history: view.history,
+            components: state.components,
+            nextSpeakerId: speaker?.id,
+            defaultMaxContextTokens: settings.defaultMaxContextTokens,
+            defaultMaxResponseTokens: settings.defaultMaxResponseTokens,
+            contextSummary: view.checkpoint?.summary,
+            mode: options.mode,
+          })
+          get().showToast(
+            `已压缩 ${plan.coveredRounds} 轮早期对话，原始消息仍保留`,
+            'success'
+          )
+        } catch (err) {
+          if (!(err instanceof Error) || !err.message.includes('aborted')) {
+            get().showToast('上下文压缩失败，本次临时沿用旧消息裁剪', 'error')
+          }
+        } finally {
+          set((s) => {
+            const next = { ...s.compactingBySession }
+            delete next[sessionId]
+            return { compactingBySession: next }
+          })
+        }
+      }
+    }
+  }
 
   const now = Date.now()
   const assistantMsg: ChatMessage = {
@@ -955,7 +1141,7 @@ async function generateAssistantReply(
 
   await storage.upsertMessage(assistantMsg)
   const updatedSession: ChatSession = {
-    ...session,
+    ...workingSession,
     activeLeafId: assistantMsg.id,
     updatedAt: now,
   }

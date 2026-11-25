@@ -86,12 +86,22 @@ const responseCookie = (headers: Record<string, string>): string | undefined => 
   return pairs.length > 0 ? pairs.join('; ') : undefined
 }
 
+/** 像素酒馆的会话与列表接口需要同源 Origin/Referer，安卓原生请求也要对齐网关。 */
+const nativeAuthHeaders = (url: string): Record<string, string> =>
+  url.startsWith('https://chat.xstavern.com/')
+    ? {
+        Origin: 'https://chat.xstavern.com',
+        Referer: 'https://chat.xstavern.com/',
+      }
+    : {}
+
 const nativePostJson = async (url: string, body: unknown, cookie?: string) => {
   const response = await CapacitorHttp.post({
     url,
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
+      ...nativeAuthHeaders(url),
       ...(cookie ? { Cookie: cookie } : {}),
     },
     data: body,
@@ -109,6 +119,7 @@ const nativeGetJson = async (url: string, cookie?: string) => {
     url,
     headers: {
       Accept: 'application/json',
+      ...nativeAuthHeaders(url),
       ...(cookie ? { Cookie: cookie } : {}),
     },
     responseType: 'json',

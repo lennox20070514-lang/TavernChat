@@ -400,6 +400,30 @@
   border-color: var(--border-default);
 }
 
+.compactingChip {
+  height: 29px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  animation: compactPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes compactPulse {
+  0%,
+  100% {
+    opacity: 0.62;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .sendBtn {
   width: 34px;
   height: 34px;

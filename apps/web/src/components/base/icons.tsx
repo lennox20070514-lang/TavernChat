@@ -181,6 +181,21 @@ export const IconTrash = ({ size = 15, ...p }: IconProps) => (
   </svg>
 )
 
+export const IconMore = ({ size = 15, ...p }: IconProps) => (
+  <svg {...base(size)} {...p}>
+    <circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none" />
+  </svg>
+)
+
+export const IconPin = ({ size = 15, ...p }: IconProps) => (
+  <svg {...base(size)} {...p}>
+    <path d="M12 17v5" />
+    <path d="M5 17h14l-1.5-6V7l2-2H4.5l2 2v4L5 17z" />
+  </svg>
+)
+
 export const IconMessage = ({ size = 15, ...p }: IconProps) => (
   <svg {...base(size)} {...p}>
     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />

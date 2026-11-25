@@ -1,5 +1,4 @@
 import clsx from 'clsx'
-import { useState } from 'react'
 import { useSettings } from '../../services/settings.ts'
 import { useAppStore } from '../../services/store.ts'
 import {
@@ -26,20 +25,9 @@ export const ActiveStageBar = ({ isMobile }: { isMobile: boolean }) => {
   const chatSearchOpen = useAppStore((s) => s.chatSearchOpen)
   const setChatSearchOpen = useAppStore((s) => s.setChatSearchOpen)
   const setMobileSiderOpen = useAppStore((s) => s.setMobileSiderOpen)
-  const renameSession = useAppStore((s) => s.renameSession)
-
-  const [editingTitle, setEditingTitle] = useState(false)
-  const [titleDraft, setTitleDraft] = useState('')
 
   const session = sessions.find((s) => s.id === activeSessionId)
   const activeCount = session?.mounts.filter((m) => m.enabled).length ?? 0
-
-  const commitTitle = () => {
-    setEditingTitle(false)
-    if (session && titleDraft.trim() && titleDraft.trim() !== session.title) {
-      void renameSession(session.id, titleDraft.trim())
-    }
-  }
 
   return (
     <header className={styles.bar}>
@@ -64,31 +52,7 @@ export const ActiveStageBar = ({ isMobile }: { isMobile: boolean }) => {
           </button>
         ) : null}
 
-        {editingTitle ? (
-          <input
-            className={styles.titleInput}
-            autoFocus
-            value={titleDraft}
-            onChange={(e) => setTitleDraft(e.target.value)}
-            onBlur={commitTitle}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') commitTitle()
-              if (e.key === 'Escape') setEditingTitle(false)
-            }}
-          />
-        ) : (
-          <span
-            className={styles.title}
-            title="双击重命名对话"
-            onDoubleClick={() => {
-              if (!session) return
-              setTitleDraft(session.title)
-              setEditingTitle(true)
-            }}
-          >
-            {session?.title || 'TavernChat'}
-          </span>
-        )}
+        <span className={styles.title}>{session?.title || 'TavernChat'}</span>
       </div>
 
       <div className={styles.right}>

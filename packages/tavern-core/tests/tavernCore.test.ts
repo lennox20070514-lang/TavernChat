@@ -6,21 +6,27 @@ import { fileURLToPath } from 'node:url'
 import {
   applyRegexScripts,
   assemblePrompt,
+  buildContextMemoryBlock,
   createBuiltinRulePresets,
   createEmptyCharacter,
   createEmptyPersona,
   createEmptyWorld,
   exportCharacterToSillyTavernPng,
   exportWorldToSillyTavernJson,
+  extractCompactionSummary,
+  findActiveCheckpoint,
   importSillyTavernCharacterPng,
   importSillyTavernWorldJson,
   parseMarketManifest,
+  planCompaction,
+  resolveCompactionBudget,
   scanWorldInfo,
   smartImportFile,
   substituteMacros,
   BUILTIN_MARKET_PLUGINS,
   type ChatMessage,
   type ChatSession,
+  type ContextCheckpoint,
 } from '../src/index.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -254,6 +260,146 @@ test('PromptAssembler dynamically mounts/unmounts multiple characters, world, pe
   })
   assert.deepEqual(assembledAfterUnmount.activeCharacterNames, ['角色甲'])
   assert.ok(!assembledAfterUnmount.messages.some((m) => m.content.includes('角色乙')))
+})
+
+test('A selected character can act as the user POV without a separate persona component', () => {
+  const pov = createEmptyCharacter('旅人')
+  pov.payload.description = '来自北方的旅人。'
+  pov.payload.personality = '谨慎'
+  pov.payload.scenario = '刚抵达港镇。'
+  const npc = createEmptyCharacter('店主')
+  npc.payload.description = '{{user}} 走进店里时，他抬起头。'
+
+  const session: ChatSession = {
+    id: 's2',
+    title: '出发视角测试',
+    mounts: [
+      { componentId: pov.id, kind: 'character', enabled: true, order: 0 },
+      { componentId: npc.id, kind: 'character', enabled: true, order: 1 },
+    ],
+    userCharacterId: pov.id,
+    authorsNote: '',
+    authorsNoteDepth: 4,
+    multiCharMode: 'manual',
+    activeLeafId: null,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+
+  const assembled = assemblePrompt({
+    session,
+    history: [],
+    components: [pov, npc],
+  })
+
+  assert.equal(assembled.activeUserName, '旅人')
+  assert.deepEqual(assembled.activeCharacterNames, ['店主'])
+  assert.ok(
+    assembled.messages.some(
+      (m) =>
+        m.sourceLabel === '用户视角 · 旅人' &&
+        m.content.includes('来自北方的旅人') &&
+        m.content.includes('谨慎')
+    )
+  )
+  assert.ok(assembled.messages.some((m) => m.content.includes('旅人 走进店里')))
+  assert.ok(!assembled.messages.some((m) => m.sourceLabel === '角色 · 旅人'))
+})
+
+test('Context compaction folds whole early rounds and preserves the latest turn', () => {
+  const history: ChatMessage[] = []
+  for (let i = 0; i < 10; i += 1) {
+    history.push({
+      id: `u${i}`,
+      sessionId: 's',
+      parentId: null,
+      role: 'user',
+      content: `第 ${i} 轮问题：` + '剧情推进与角色对话。'.repeat(20),
+      createdAt: i * 2,
+      updatedAt: i * 2,
+    })
+    history.push({
+      id: `a${i}`,
+      sessionId: 's',
+      parentId: null,
+      role: 'assistant',
+      speakerName: '角色甲',
+      content: `第 ${i} 轮回答：` + '角色作出回应并推进场景。'.repeat(20),
+      createdAt: i * 2 + 1,
+      updatedAt: i * 2 + 1,
+    })
+  }
+
+  const budget = resolveCompactionBudget(32768, 'balanced')
+  assert.equal(
+    planCompaction({
+      history,
+      activeCheckpoint: null,
+      budget,
+      estimatedTokens: 100,
+    }),
+    null
+  )
+
+  const plan = planCompaction({
+    history,
+    activeCheckpoint: null,
+    budget,
+    estimatedTokens: budget.triggerTokens + 100,
+  })
+  assert.ok(plan)
+  assert.ok(plan.messagesToCompactCount > 0)
+  assert.ok(plan.messagesToCompactCount < history.length)
+  assert.ok(plan.chunks.length > 0)
+  assert.notEqual(plan.targetAnchorMessageId, history.at(-1)!.id)
+  assert.notEqual(plan.targetAnchorMessageId, history.at(-2)!.id)
+
+  const checkpoint: ContextCheckpoint = {
+    id: 'cp1',
+    upToMessageId: plan.targetAnchorMessageId,
+    summary: '早期剧情摘要',
+    coveredRounds: plan.coveredRounds,
+    summaryTokens: 20,
+    createdAt: 10,
+  }
+  const anchorIndex = findActiveCheckpoint(history, [checkpoint])?.anchorIndex
+  assert.equal(
+    anchorIndex,
+    history.findIndex((message) => message.id === plan.targetAnchorMessageId)
+  )
+  assert.ok(anchorIndex !== undefined && anchorIndex < history.length - 2)
+})
+
+test('Compaction extracts structured memory and injects it into the system prefix', () => {
+  assert.equal(
+    extractCompactionSummary('<analysis>逐轮核对</analysis><summary>角色甲欠角色乙一个人情。</summary>'),
+    '角色甲欠角色乙一个人情。'
+  )
+  assert.ok(buildContextMemoryBlock('角色甲欠角色乙一个人情。').includes('<conversation_memory>'))
+
+  const rule = createBuiltinRulePresets()[0]!
+  const session: ChatSession = {
+    id: 's3',
+    title: '压缩注入测试',
+    mounts: [{ componentId: rule.id, kind: 'rule', enabled: true, order: 0 }],
+    authorsNote: '',
+    authorsNoteDepth: 4,
+    multiCharMode: 'narrator',
+    activeLeafId: null,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const assembled = assemblePrompt({
+    session,
+    history: [],
+    components: [rule],
+    contextSummary: '角色甲欠角色乙一个人情。',
+  })
+  assert.ok(
+    assembled.messages.some(
+      (m) => m.sourceLabel === '上下文记忆' && m.content.includes('角色甲欠角色乙一个人情。')
+    )
+  )
 })
 
 test('Real SillyTavern sample files (PNG / World JSON / Preset / Group / Chat JSONL) import cleanly', () => {

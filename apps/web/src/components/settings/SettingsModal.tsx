@@ -297,6 +297,9 @@ export const SettingsModal = () => {
                       })
                     }
                   />
+                  <div className={styles.hint}>
+                    达到触发阈值时会先把早期对话压缩成结构化长期记忆；压缩失败才回退为裁剪最早历史。
+                  </div>
                 </div>
 
                 <div className={styles.field}>
@@ -313,6 +316,28 @@ export const SettingsModal = () => {
                       })
                     }
                   />
+                </div>
+
+                <div className={styles.field}>
+                  <label className={styles.label}>上下文压缩</label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {(['off', 'balanced', 'extended'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={clsx(
+                          styles.pill,
+                          settings.contextCompression === mode && styles.pillActive
+                        )}
+                        onClick={() => settings.updateGeneral({ contextCompression: mode })}
+                      >
+                        {mode === 'off' ? '关闭' : mode === 'balanced' ? '均衡（推荐）' : '长记忆'}
+                      </button>
+                    ))}
+                  </div>
+                  <div className={styles.hint}>
+                    达到阈值时把早期对话压成结构化长期记忆，最近对话保持原文；未触发时不改变前缀，原始消息始终保留在本地。
+                  </div>
                 </div>
 
                 <label className={styles.row} style={{ cursor: 'pointer' }}>
