@@ -1,6 +1,7 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core'
 import { BUILTIN_MARKET_PLUGINS, type MarketplacePlugin } from '@tavern-chat/core'
 import { resolveGatewayOrigin } from './llm/client.ts'
+import { createTimeoutSignal } from '../utils/compat.ts'
 
 export type MarketAuthUser = {
   username?: string
@@ -179,10 +180,11 @@ export async function getMarketAuthStatus(
   if (gateway === null) {
     return { loggedIn: false, error: '请使用桌面端或安卓端登录' }
   }
+  const timeout = createTimeoutSignal(30_000)
   try {
     const response = await fetch(
       gateway + '/api/v1/market/auth/status?pluginId=' + encodeURIComponent(pluginId),
-      { signal: AbortSignal.timeout(30_000) }
+      { signal: timeout.signal }
     )
     const data: unknown = await response.json()
     const record = isRecord(data) ? data : {}
@@ -194,6 +196,8 @@ export async function getMarketAuthStatus(
     }
   } catch (err) {
     return { loggedIn: false, error: friendlyError(err) }
+  } finally {
+    timeout.cancel()
   }
 }
 
@@ -223,12 +227,18 @@ export async function marketLogin(
 
   const gateway = await resolveGatewayOrigin(customOrigin)
   if (gateway === null) throw new Error('请使用桌面端或安卓端登录')
-  const response = await fetch(gateway + '/api/v1/market/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pluginId, username, password }),
-    signal: AbortSignal.timeout(40_000),
-  })
+  const timeout = createTimeoutSignal(40_000)
+  let response: Response
+  try {
+    response = await fetch(gateway + '/api/v1/market/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pluginId, username, password }),
+      signal: timeout.signal,
+    })
+  } finally {
+    timeout.cancel()
+  }
   const data: unknown = await response.json()
   const record = isRecord(data) ? data : {}
   if (!response.ok) throw new Error(authError(record, `登录失败：HTTP ${response.status}`))
@@ -284,18 +294,24 @@ export async function marketRegister(
 
   const gateway = await resolveGatewayOrigin(customOrigin)
   if (gateway === null) throw new Error('请使用桌面端或安卓端注册')
-  const response = await fetch(gateway + '/api/v1/market/auth/register', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      pluginId,
-      username: input.username,
-      password: input.password,
-      email: input.email,
-      code: input.code,
-    }),
-    signal: AbortSignal.timeout(40_000),
-  })
+  const timeout = createTimeoutSignal(40_000)
+  let response: Response
+  try {
+    response = await fetch(gateway + '/api/v1/market/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pluginId,
+        username: input.username,
+        password: input.password,
+        email: input.email,
+        code: input.code,
+      }),
+      signal: timeout.signal,
+    })
+  } finally {
+    timeout.cancel()
+  }
   const data: unknown = await response.json()
   const record = isRecord(data) ? data : {}
   if (!response.ok) throw new Error(authError(record, `注册失败：HTTP ${response.status}`))
@@ -326,12 +342,18 @@ export async function marketSendCode(
 
   const gateway = await resolveGatewayOrigin(customOrigin)
   if (gateway === null) throw new Error('请使用桌面端或安卓端发送验证码')
-  const response = await fetch(gateway + '/api/v1/market/auth/send-code', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pluginId, email }),
-    signal: AbortSignal.timeout(40_000),
-  })
+  const timeout = createTimeoutSignal(40_000)
+  let response: Response
+  try {
+    response = await fetch(gateway + '/api/v1/market/auth/send-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pluginId, email }),
+      signal: timeout.signal,
+    })
+  } finally {
+    timeout.cancel()
+  }
   const data: unknown = await response.json()
   const record = isRecord(data) ? data : {}
   if (!response.ok) throw new Error(authError(record, `验证码发送失败：HTTP ${response.status}`))
@@ -356,12 +378,18 @@ export async function marketLogout(pluginId: string, customOrigin?: string): Pro
 
   const gateway = await resolveGatewayOrigin(customOrigin)
   if (gateway === null) throw new Error('请使用桌面端或安卓端退出登录')
-  const response = await fetch(gateway + '/api/v1/market/auth/logout', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pluginId }),
-    signal: AbortSignal.timeout(30_000),
-  })
+  const timeout = createTimeoutSignal(30_000)
+  let response: Response
+  try {
+    response = await fetch(gateway + '/api/v1/market/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pluginId }),
+      signal: timeout.signal,
+    })
+  } finally {
+    timeout.cancel()
+  }
   const data: unknown = await response.json()
   const record = isRecord(data) ? data : {}
   if (!response.ok) throw new Error(authError(record, `退出失败：HTTP ${response.status}`))

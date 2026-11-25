@@ -14,6 +14,7 @@ import {
 } from '@tavern-chat/core'
 import { resolveGatewayOrigin } from './llm/client.ts'
 import { getMarketAuthStatus } from './marketAuth.ts'
+import { createTimeoutSignal } from '../utils/compat.ts'
 
 export type MarketPluginView = {
   id: string
@@ -199,12 +200,18 @@ const gatewayGet = async (
   url: string,
   mode: FetchMode
 ): Promise<string | Uint8Array> => {
-  const response = await fetch(gateway + '/api/v1/market/proxy', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, as: mode }),
-    signal: AbortSignal.timeout(120_000),
-  })
+  const timeout = createTimeoutSignal(120_000)
+  let response: Response
+  try {
+    response = await fetch(gateway + '/api/v1/market/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, as: mode }),
+      signal: timeout.signal,
+    })
+  } finally {
+    timeout.cancel()
+  }
   if (!response.ok) {
     const raw = await response.text().catch(() => '')
     let message = raw
@@ -223,13 +230,18 @@ const gatewayGet = async (
 }
 
 const directGet = async (url: string, mode: FetchMode): Promise<string | Uint8Array> => {
-  const response = await fetch(url, {
-    headers: { Accept: acceptFor(mode) },
-    signal: AbortSignal.timeout(60_000),
-    redirect: 'error',
-  })
-  if (!response.ok) throw new Error('来源返回 HTTP ' + response.status)
-  return mode === 'bytes' ? new Uint8Array(await response.arrayBuffer()) : response.text()
+  const timeout = createTimeoutSignal(60_000)
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: acceptFor(mode) },
+      signal: timeout.signal,
+      redirect: 'error',
+    })
+    if (!response.ok) throw new Error('来源返回 HTTP ' + response.status)
+    return mode === 'bytes' ? new Uint8Array(await response.arrayBuffer()) : response.text()
+  } finally {
+    timeout.cancel()
+  }
 }
 
 const requestSource = async (

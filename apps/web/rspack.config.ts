@@ -6,7 +6,7 @@ import { rspack } from '@rspack/core'
 
 const dev = process.env.NODE_ENV !== 'production'
 const root = path.dirname(fileURLToPath(import.meta.url))
-const targets = ['chrome >= 105', 'edge >= 105', 'safari >= 16', 'firefox >= 110']
+const targets = ['chrome >= 90', 'edge >= 90', 'safari >= 15', 'firefox >= 95']
 
 const rootPkg = JSON.parse(
   fs.readFileSync(path.resolve(root, '../../package.json'), 'utf8')
@@ -23,7 +23,9 @@ const githubRepo =
 const defaultUpdateManifestUrl =
   process.env.TAVERN_UPDATE_MANIFEST_URL ||
   (githubRepo ? `https://github.com/${githubRepo}/releases/latest/download/latest.json` : '')
-const defaultUpdateMirrorUrl = process.env.TAVERN_UPDATE_MIRROR_URL || ''
+const defaultUpdateMirrorUrl =
+  process.env.TAVERN_UPDATE_MIRROR_URL ||
+  'https://gh-proxy.org/,https://gh-proxy.com/,https://cdn.gh-proxy.org/,https://ghproxy.net/'
 
 const cssLoader = {
   loader: 'builtin:lightningcss-loader',

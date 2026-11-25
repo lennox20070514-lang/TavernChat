@@ -13,6 +13,7 @@
     "build": "corepack pnpm --filter @tavern-chat/core type && corepack pnpm --filter @tavern-chat/server type && corepack pnpm --filter @tavern-chat/web build",
     "apk:sync": "corepack pnpm --filter @tavern-chat/web apk:sync",
     "apk:debug": "corepack pnpm --filter @tavern-chat/web apk:sync && node scripts/build-apk.mjs",
+    "apk:release": "corepack pnpm --filter @tavern-chat/web apk:sync && node scripts/build-apk.mjs --release",
     "exe:build": "corepack pnpm --filter @tavern-chat/desktop build"
   }
 }

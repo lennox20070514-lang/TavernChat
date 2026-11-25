@@ -1,6 +1,14 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core'
 import { create } from 'zustand'
+import { createTimeoutSignal } from '../utils/compat.ts'
 import { useSettings } from './settings.ts'
+
+export const DEFAULT_PUBLIC_MIRROR_PREFIXES = [
+  'https://gh-proxy.org/',
+  'https://gh-proxy.com/',
+  'https://cdn.gh-proxy.org/',
+  'https://ghproxy.net/',
+]
 
 export const CURRENT_APP_VERSION =
   typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0'
@@ -67,40 +75,90 @@ const isHttpsUrl = (value: string): boolean => {
   }
 }
 
+const splitMirrorEntries = (raw: string): string[] =>
+  raw
+    .split(/[\r\n,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+const normalizeMirrorPrefix = (raw: string): string | null => {
+  const trimmed = raw.trim()
+  if (!trimmed || trimmed.endsWith('.json') || !isHttpsUrl(trimmed)) return null
+  return trimmed.endsWith('/') ? trimmed : `${trimmed}/`
+}
+
 const applyMirrorPrefix = (targetUrl: string, mirrorOrPrefix: string): string | null => {
-  const trimmed = mirrorOrPrefix.trim()
-  if (!trimmed || !isHttpsUrl(targetUrl)) return null
-  if (trimmed.endsWith('.json')) return null
-  const normalizedPrefix = trimmed.endsWith('/') ? trimmed : `${trimmed}/`
-  const candidate = `${normalizedPrefix}${targetUrl}`
+  const prefix = normalizeMirrorPrefix(mirrorOrPrefix)
+  if (!prefix || !isHttpsUrl(targetUrl)) return null
+  const candidate = `${prefix}${targetUrl}`
   return isHttpsUrl(candidate) ? candidate : null
 }
 
-/** 生成版本清单检查顺序：优先镜像站地址（若配置），失败回退 GitHub Release 原地址。 */
-export function buildManifestCandidates(manifestUrl: string, mirrorUrl: string): string[] {
+export type ManifestCandidate = {
+  url: string
+  mirrorPrefix?: string
+}
+
+/** 生成版本清单检查顺序：优先自定义/多节点镜像站，最后回退 GitHub Release 原地址。 */
+export function buildManifestCandidates(manifestUrl: string, mirrorConfig: string): string[] {
+  return buildManifestCandidateEntries(manifestUrl, mirrorConfig).map((entry) => entry.url)
+}
+
+function buildManifestCandidateEntries(
+  manifestUrl: string,
+  mirrorConfig: string
+): ManifestCandidate[] {
   const cleanManifest = manifestUrl.trim()
-  const cleanMirror = mirrorUrl.trim()
-  const list: string[] = []
-
-  if (cleanMirror && isHttpsUrl(cleanMirror) && cleanMirror.endsWith('.json')) {
-    list.push(cleanMirror)
-  } else if (cleanMirror && cleanManifest) {
-    const mirrored = applyMirrorPrefix(cleanManifest, cleanMirror)
-    if (mirrored) list.push(mirrored)
+  const entries: ManifestCandidate[] = []
+  const seen = new Set<string>()
+  const push = (url: string, mirrorPrefix?: string) => {
+    if (!url || seen.has(url) || !isHttpsUrl(url)) return
+    seen.add(url)
+    entries.push({ url, mirrorPrefix })
   }
 
-  if (cleanManifest && isHttpsUrl(cleanManifest) && !list.includes(cleanManifest)) {
-    list.push(cleanManifest)
+  for (const rawMirror of splitMirrorEntries(mirrorConfig)) {
+    if (rawMirror.endsWith('.json')) {
+      push(rawMirror)
+    } else if (cleanManifest) {
+      const mirrored = applyMirrorPrefix(cleanManifest, rawMirror)
+      const prefix = normalizeMirrorPrefix(rawMirror) ?? undefined
+      if (mirrored) push(mirrored, prefix)
+    }
   }
-  return list
+
+  if (cleanManifest) {
+    for (const fallbackPrefix of DEFAULT_PUBLIC_MIRROR_PREFIXES) {
+      const mirrored = applyMirrorPrefix(cleanManifest, fallbackPrefix)
+      if (mirrored) push(mirrored, fallbackPrefix)
+    }
+    push(cleanManifest)
+  }
+
+  return entries
 }
 
 export function resolveDownloadLinks(
   manifest: AppReleaseManifest,
-  mirrorUrl: string
+  mirrorConfig: string,
+  preferredMirrorPrefix?: string
 ): { preferredUrl: string; fallbackUrl?: string; viaMirror: boolean } {
   const direct = manifest.apkUrl?.trim() || manifest.releasePageUrl?.trim() || ''
   const mirrorDirect = manifest.mirrorApkUrl?.trim() || ''
+  const apkDirect = manifest.apkUrl?.trim() || ''
+
+  // 若某个公共/自定义镜像刚成功拉取清单且拿到 APK 直链，优先复用同节点加速下载
+  if (apkDirect && preferredMirrorPrefix) {
+    const activeMirrored = applyMirrorPrefix(apkDirect, preferredMirrorPrefix)
+    if (activeMirrored && activeMirrored !== apkDirect) {
+      return {
+        preferredUrl: activeMirrored,
+        fallbackUrl: direct,
+        viaMirror: true,
+      }
+    }
+  }
+
   if (mirrorDirect && isHttpsUrl(mirrorDirect)) {
     return {
       preferredUrl: mirrorDirect,
@@ -108,8 +166,12 @@ export function resolveDownloadLinks(
       viaMirror: true,
     }
   }
+
   if (direct) {
-    const prefixed = applyMirrorPrefix(direct, mirrorUrl)
+    const configuredPrefixes = splitMirrorEntries(mirrorConfig).filter((m) => !m.endsWith('.json'))
+    const candidatePrefix =
+      configuredPrefixes[0] || DEFAULT_PUBLIC_MIRROR_PREFIXES[0] || ''
+    const prefixed = applyMirrorPrefix(direct, candidatePrefix)
     if (prefixed && prefixed !== direct) {
       return {
         preferredUrl: prefixed,
@@ -118,6 +180,7 @@ export function resolveDownloadLinks(
       }
     }
   }
+
   return {
     preferredUrl: direct,
     viaMirror: false,
@@ -178,13 +241,18 @@ async function fetchManifestJson(url: string): Promise<unknown> {
     return res.data
   }
 
-  const res = await fetch(url, {
-    cache: 'no-store',
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: { Accept: 'application/json' },
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return await res.json()
+  const timeout = createTimeoutSignal(REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      cache: 'no-store',
+      signal: timeout.signal,
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return await res.json()
+  } finally {
+    timeout.cancel()
+  }
 }
 
 type UpdaterState = {
@@ -215,7 +283,7 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     const settings = useSettings.getState()
     const effectiveManifestUrl = BUILTIN_UPDATE_MANIFEST_URL || settings.updateManifestUrl
     const effectiveMirrorUrl = BUILTIN_UPDATE_MIRROR_URL || settings.updateMirrorUrl
-    const candidates = buildManifestCandidates(effectiveManifestUrl, effectiveMirrorUrl)
+    const candidates = buildManifestCandidateEntries(effectiveManifestUrl, effectiveMirrorUrl)
     if (candidates.length === 0) {
       return { status: 'unconfigured' }
     }
@@ -235,12 +303,14 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     set({ checking: true, lastError: '' })
     try {
       let parsedManifest: AppReleaseManifest | null = null
+      let matchedMirrorPrefix: string | undefined
       let lastErr: unknown = null
 
-      for (const candidateUrl of candidates) {
+      for (const candidate of candidates) {
         try {
-          const json = await fetchManifestJson(candidateUrl)
+          const json = await fetchManifestJson(candidate.url)
           parsedManifest = parseReleaseManifest(json)
+          matchedMirrorPrefix = candidate.mirrorPrefix
           break
         } catch (err) {
           lastErr = err
@@ -248,8 +318,11 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
       }
 
       if (!parsedManifest) {
-        const message =
+        const rawMessage =
           lastErr instanceof Error ? lastErr.message : '无法连接更新服务器或镜像站'
+        const message = /HTTP 404/i.test(rawMessage)
+          ? '仓库尚未发布任何 Release 版本，发布第一个版本后即可自动检查更新'
+          : rawMessage
         set({ lastError: silent ? '' : message })
         return { status: 'error', message }
       }
@@ -273,7 +346,7 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
         return { status: 'skipped' }
       }
 
-      const links = resolveDownloadLinks(parsedManifest, effectiveMirrorUrl)
+      const links = resolveDownloadLinks(parsedManifest, effectiveMirrorUrl, matchedMirrorPrefix)
       if (!links.preferredUrl) {
         return { status: 'latest', version: CURRENT_APP_VERSION }
       }

@@ -10,8 +10,8 @@ const webDistSource = path.join(webDir, 'dist')
 const webDistDest = path.join(rootDir, 'web-dist')
 const outDir = path.join(rootDir, 'dist')
 
-const buildWeb = spawnSync('npm', ['run', 'build'], {
-  cwd: webDir,
+const buildWeb = spawnSync('corepack', ['pnpm', '--filter', '@tavern-chat/web', 'build'], {
+  cwd: path.resolve(rootDir, '../..'),
   stdio: 'inherit',
   shell: true,
 })

@@ -9,13 +9,18 @@ const shimDir = path.join(os.tmpdir(), 'tavern-chat-pnpm-shim')
 mkdirSync(shimDir, { recursive: true })
 writeFileSync(path.join(shimDir, 'pnpm.cmd'), '@echo off\r\ncorepack pnpm %*\r\n', 'utf8')
 
+const useChinaMirror = !process.env.CI
 const env = {
   ...process.env,
   COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
-  ELECTRON_MIRROR: process.env.ELECTRON_MIRROR || 'https://npmmirror.com/mirrors/electron/',
-  ELECTRON_BUILDER_BINARIES_MIRROR:
-    process.env.ELECTRON_BUILDER_BINARIES_MIRROR ||
-    'https://npmmirror.com/mirrors/electron-builder-binaries/',
+  ...(useChinaMirror
+    ? {
+        ELECTRON_MIRROR: process.env.ELECTRON_MIRROR || 'https://npmmirror.com/mirrors/electron/',
+        ELECTRON_BUILDER_BINARIES_MIRROR:
+          process.env.ELECTRON_BUILDER_BINARIES_MIRROR ||
+          'https://npmmirror.com/mirrors/electron-builder-binaries/',
+      }
+    : {}),
   CSC_IDENTITY_AUTO_DISCOVERY: 'false',
   PATH: `${shimDir}${path.delimiter}${process.env.PATH ?? ''}`,
 }

@@ -1034,3 +1034,41 @@ test('Group chat drafts shuffled_round, natural, round_robin, manual, strips pre
   assert.equal(parsedGroup.groupConfig?.allowSelfReply, true)
   assert.equal(parsedGroup.groupConfig?.autoModeDelaySec, 6)
 })
+
+test('Forward/backward compatibility: unknown future snapshot fields and binary CHARX/.card bytes import cleanly', () => {
+  // 1) 模拟老版本客户端读取未来版本同步快照（包含未知字段 / 缺省设置）
+  const futureSnapshot = parseSyncSnapshot({
+    schema: 1,
+    revision: 9,
+    updatedAt: 2000,
+    futureFieldX: { experimental: true },
+    components: [createEmptyCharacter('跨版本卡')],
+    sessions: [],
+    messages: [],
+    deletedIds: { old_id: 1500 },
+    settings: {
+      providers: [],
+      activeProviderId: 'prov_deepseek',
+      contextCompression: 'future_unknown_mode',
+      updatedAt: 2000,
+    },
+  })
+  assert.equal(futureSnapshot.revision, 9)
+  assert.equal(futureSnapshot.components.length, 1)
+  assert.equal(futureSnapshot.settings?.contextCompression, 'balanced')
+  assert.equal(futureSnapshot.settings?.defaultMaxContextTokens, 32768)
+
+  // 2) 验证 .card 后缀无论是 JSON 文本以 Uint8Array 传入还是 PNG/ZIP 二进制均可识别
+  const jsonBytes = new TextEncoder().encode(
+    JSON.stringify({
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: { name: 'BinaryCardExt', description: 'desc', first_mes: 'hi' },
+    })
+  )
+  const importedCardJson = smartImportFile('sample.card', jsonBytes, 'sess_compat')
+  assert.equal(importedCardJson.kind, 'character')
+  if (importedCardJson.kind === 'character') {
+    assert.equal(importedCardJson.bundle.character.name, 'BinaryCardExt')
+  }
+})

@@ -1,4 +1,5 @@
 import type { LlmChatMessage } from '@tavern-chat/core'
+import { createTimeoutSignal } from '../../utils/compat.ts'
 import type { ProviderConfig, ProviderFormat } from '../settings.ts'
 
 export type StreamChunkEvent =
@@ -27,15 +28,18 @@ export function resetHostDiscoveryCache(): void {
 }
 
 export async function probeTavernHealth(originPrefix: string): Promise<HealthResponse | null> {
+  const timeout = createTimeoutSignal(1500)
   try {
     const res = await fetch(`${originPrefix}/api/v1/health`, {
-      signal: AbortSignal.timeout(1500),
+      signal: timeout.signal,
     })
     if (!res.ok) return null
     const data = (await res.json()) as HealthResponse
     if (data.ok && data.app === 'TavernChat') return data
   } catch {
     // 无可用网关/同步端
+  } finally {
+    timeout.cancel()
   }
   return null
 }
@@ -149,7 +153,13 @@ export async function fetchProviderModels(
       headers['Authorization'] = `Bearer ${provider.apiKey}`
     }
   }
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) })
+  const timeout = createTimeoutSignal(10_000)
+  let res: Response
+  try {
+    res = await fetch(url, { headers, signal: timeout.signal })
+  } finally {
+    timeout.cancel()
+  }
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 160)}`)
   }
@@ -233,10 +243,10 @@ function createThinkTagSplitter(onEvent: (e: StreamChunkEvent) => void) {
 export async function streamChatCompletion(params: StreamChatParams): Promise<void> {
   const { provider, messages, temperature, topP, maxTokens, signal, onEvent } = params
   if (!provider.baseUrl.trim() || !provider.model.trim()) {
-    throw new Error('请先在「设置 → 服务」中填写接口地址与模型名称')
+    throw new Error('请先在「设置 → 模型服务」中填写接口地址与模型名称')
   }
   if (provider.format !== 'ollama' && !provider.apiKey.trim()) {
-    throw new Error(`请先在「设置 → 服务」中填写 ${provider.name} 的 API Key`)
+    throw new Error(`请先在「设置 → 模型服务」中填写 ${provider.name} 的 API Key`)
   }
 
   const splitter = createThinkTagSplitter(onEvent)

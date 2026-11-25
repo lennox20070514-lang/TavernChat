@@ -28,6 +28,7 @@ import { create } from 'zustand'
 import { runCompaction } from './contextCompaction.ts'
 import { streamChatCompletion } from './llm/client.ts'
 import { getActiveProvider, useSettings } from './settings.ts'
+import { hasOwn } from '../utils/compat.ts'
 import { storage } from './storage/indexedDbAdapter.ts'
 import {
   isApplyingRemoteSync,
@@ -284,7 +285,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const state = get()
     const missingIds = state.sessions
       .map((s) => s.id)
-      .filter((id) => !Object.hasOwn(state.messagesBySession, id))
+      .filter((id) => !hasOwn(state.messagesBySession, id))
     if (missingIds.length === 0) return
     const loadedEntries = await Promise.all(
       missingIds.map(async (id) => [id, await storage.listMessages(id)] as const)
@@ -292,7 +293,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     set((s) => {
       const next = { ...s.messagesBySession }
       for (const [id, msgs] of loadedEntries) {
-        if (!Object.hasOwn(next, id)) {
+        if (!hasOwn(next, id)) {
           next[id] = msgs
         }
       }
@@ -1153,7 +1154,12 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     for (const file of files) {
       try {
         const lower = file.name.toLowerCase()
-        const content: Uint8Array | string = lower.endsWith('.png')
+        const isBinaryAsset =
+          lower.endsWith('.png') ||
+          lower.endsWith('.charx') ||
+          lower.endsWith('.zip') ||
+          lower.endsWith('.card')
+        const content: Uint8Array | string = isBinaryAsset
           ? new Uint8Array(await file.arrayBuffer())
           : await file.text()
         const newSessionId = uid('sess')

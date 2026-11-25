@@ -26,6 +26,7 @@ import {
   IconRefresh,
   IconSearch,
   IconSend,
+  IconSettings,
   IconStop,
   IconTrash,
   IconUpload,
@@ -381,7 +382,21 @@ export const ChatWorkspace = () => {
           ) : (
             <div className={styles.assistantContent}>
               {msg.content ? (
-                <MarkdownText content={msg.content} highlightQuery={hl} />
+                <>
+                  <MarkdownText content={msg.content} highlightQuery={hl} />
+                  {/API Key|接口地址/i.test(msg.content) && msg.content.includes('⚠️ 请求失败') ? (
+                    <div style={{ marginTop: 8 }}>
+                      <button
+                        type="button"
+                        className={styles.actionPill}
+                        onClick={() => setSettingsOpen(true)}
+                      >
+                        <IconSettings size={13} />
+                        <span>前往设置填写 API Key</span>
+                      </button>
+                    </div>
+                  ) : null}
+                </>
               ) : streaming && isLast ? (
                 <span className={styles.typingDot} />
               ) : null}
@@ -602,6 +617,16 @@ export const ChatWorkspace = () => {
               你的角色，你的世界，你的故事。
             </p>
             <div className={styles.welcomeActions}>
+              {activeProvider.format !== 'ollama' && !activeProvider.apiKey.trim() ? (
+                <button
+                  type="button"
+                  className={styles.actionPill}
+                  onClick={() => setSettingsOpen(true)}
+                >
+                  <IconSettings size={14} />
+                  <span>配置模型 API Key</span>
+                </button>
+              ) : null}
               <button
                 type="button"
                 className={styles.actionPill}

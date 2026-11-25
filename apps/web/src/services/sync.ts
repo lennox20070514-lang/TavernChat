@@ -4,6 +4,7 @@ import {
   type TavernSyncSnapshot,
 } from '@tavern-chat/core'
 import { create } from 'zustand'
+import { createTimeoutSignal } from '../utils/compat.ts'
 import { probeTavernHealth, resolveSyncHostOrigin } from './llm/client.ts'
 import {
   getNativeLanHostStatus,
@@ -290,10 +291,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     syncInFlight = true
     set({ syncing: true })
     try {
-      const getRes = await fetch(`${syncOrigin}/api/v1/sync/snapshot`, {
-        cache: 'no-store',
-        signal: AbortSignal.timeout(5000),
-      })
+      const getTimeout = createTimeoutSignal(5000)
+      let getRes: Response
+      try {
+        getRes = await fetch(`${syncOrigin}/api/v1/sync/snapshot`, {
+          cache: 'no-store',
+          signal: getTimeout.signal,
+        })
+      } finally {
+        getTimeout.cancel()
+      }
       if (!getRes.ok) throw new Error(`HTTP ${getRes.status}`)
       const getPayload = (await getRes.json()) as { snapshot?: unknown }
       const remote = parseSyncSnapshot(getPayload.snapshot)
@@ -306,12 +313,18 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       let activeRevision = remote.revision
       if (forcePush || snapshotsNeedUpload(merged, remote)) {
         for (let attempt = 0; attempt < 2; attempt += 1) {
-          const postRes = await fetch(`${syncOrigin}/api/v1/sync/snapshot`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ snapshot: merged, baseRevision: activeRevision }),
-            signal: AbortSignal.timeout(8000),
-          })
+          const postTimeout = createTimeoutSignal(8000)
+          let postRes: Response
+          try {
+            postRes = await fetch(`${syncOrigin}/api/v1/sync/snapshot`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ snapshot: merged, baseRevision: activeRevision }),
+              signal: postTimeout.signal,
+            })
+          } finally {
+            postTimeout.cancel()
+          }
           const postPayload = (await postRes.json()) as {
             ok?: boolean
             conflict?: boolean

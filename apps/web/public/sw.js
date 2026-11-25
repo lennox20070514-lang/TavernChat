@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v1'
+const CACHE_VERSION = 'v2'
 const SHELL_CACHE = `tavernchat-shell-${CACHE_VERSION}`
 const STATIC_CACHE = `tavernchat-static-${CACHE_VERSION}`
 const KEEP_CACHES = new Set([SHELL_CACHE, STATIC_CACHE])

@@ -19,6 +19,7 @@ export const ActiveStageBar = ({ isMobile }: { isMobile: boolean }) => {
   const setSiderCollapsed = useSettings((s) => s.setSiderCollapsed)
 
   const sessions = useAppStore((s) => s.sessions)
+  const components = useAppStore((s) => s.components)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const mountDrawerOpen = useAppStore((s) => s.mountDrawerOpen)
   const setMountDrawerOpen = useAppStore((s) => s.setMountDrawerOpen)
@@ -28,6 +29,14 @@ export const ActiveStageBar = ({ isMobile }: { isMobile: boolean }) => {
 
   const session = sessions.find((s) => s.id === activeSessionId)
   const activeCount = session?.mounts.filter((m) => m.enabled).length ?? 0
+  const activeCharNames = (session?.mounts ?? [])
+    .filter((m) => m.enabled && m.componentId !== session?.userCharacterId)
+    .map((m) => components.find((c) => c.id === m.componentId && c.kind === 'character')?.name)
+    .filter((n): n is string => Boolean(n))
+  const displayTitle =
+    activeCharNames.length >= 2 && session?.title === activeCharNames[0]
+      ? `群聊（${activeCharNames.length} 人）· ${activeCharNames.slice(0, 2).join('、')}`
+      : session?.title || 'TavernChat'
 
   return (
     <header className={styles.bar}>
@@ -52,7 +61,7 @@ export const ActiveStageBar = ({ isMobile }: { isMobile: boolean }) => {
           </button>
         ) : null}
 
-        <span className={styles.title}>{session?.title || 'TavernChat'}</span>
+        <span className={styles.title}>{displayTitle}</span>
       </div>
 
       <div className={styles.right}>
