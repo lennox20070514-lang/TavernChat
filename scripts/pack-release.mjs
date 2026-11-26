@@ -4,6 +4,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -22,18 +23,21 @@ const dirWindows = path.join(releaseRoot, '02-电脑版(Windows)')
 const dirManual = path.join(releaseRoot, '03-使用说明书(新手必看)')
 const dirGitHub = path.join(releaseRoot, '04-GitHub-Release上传文件')
 const dirZip = path.join(releaseRoot, '05-分类压缩包(ZIP)')
+const dirStaticWeb = path.join(releaseRoot, '06-静态网页托管包(iOS与网页)')
 
 const androidReleaseApk = path.join(root, 'apps', 'web', 'release', `TavernChat-v${version}-android.apk`)
 const androidDebugApk = path.join(root, 'apps', 'web', 'release', `TavernChat-${version}-android-debug.apk`)
 const apkSource = existsSync(androidReleaseApk) ? androidReleaseApk : androidDebugApk
 const setupExe = path.join(root, 'apps', 'desktop', 'release', `TavernChat-${version}-Setup-x64.exe`)
 const portableExe = path.join(root, 'apps', 'desktop', 'release', `TavernChat-${version}-Portable-x64.exe`)
+const webDistDir = path.join(root, 'apps', 'web', 'dist')
 const manualPdf = path.join(root, 'docs', 'TavernChat使用说明书.pdf')
 
 for (const [label, filePath] of [
   ['Android APK', apkSource],
   ['Windows Setup EXE', setupExe],
   ['Windows Portable EXE', portableExe],
+  ['Static Web dist', webDistDir],
   ['PDF Manual', manualPdf],
 ]) {
   if (!existsSync(filePath)) {
@@ -43,7 +47,7 @@ for (const [label, filePath] of [
 }
 
 rmSync(releaseRoot, { recursive: true, force: true })
-for (const d of [dirAndroid, dirWindows, dirManual, dirGitHub, dirZip]) {
+for (const d of [dirAndroid, dirWindows, dirManual, dirGitHub, dirZip, dirStaticWeb]) {
   mkdirSync(d, { recursive: true })
 }
 
@@ -61,6 +65,26 @@ copyFileSync(portableExe, path.join(dirWindows, portableAssetName))
 copyFileSync(manualPdf, path.join(dirWindows, manualName))
 
 copyFileSync(manualPdf, path.join(dirManual, manualName))
+
+function copyDirRecursive(srcDir, destDir) {
+  mkdirSync(destDir, { recursive: true })
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    const srcPath = path.join(srcDir, entry.name)
+    const destPath = path.join(destDir, entry.name)
+    if (entry.isDirectory()) {
+      copyDirRecursive(srcPath, destPath)
+    } else {
+      copyFileSync(srcPath, destPath)
+    }
+  }
+}
+
+// 1.5. 填充静态网页部署包（可直接上传 Cloudflare Pages / EdgeOne Pages / GitHub Pages，供 iOS 与全平台访问）
+copyDirRecursive(webDistDir, dirStaticWeb)
+writeFileSync(path.join(dirStaticWeb, '.nojekyll'), '')
+if (existsSync(path.join(dirStaticWeb, 'index.html'))) {
+  copyFileSync(path.join(dirStaticWeb, 'index.html'), path.join(dirStaticWeb, '404.html'))
+}
 
 // 2. 填充 GitHub Release 上传文件 + 生成 latest.json
 copyFileSync(apkSource, path.join(dirGitHub, androidAssetName))
@@ -113,7 +137,14 @@ make_zip(r"${path.join(dirZip, `TavernChat-v${version}-全平台合集.zip`)}", 
     (r"${path.join(dirWindows, portableAssetName)}", "02-电脑版(Windows)/${portableAssetName}"),
     (r"${path.join(dirManual, manualName)}", "${manualName}"),
 ])
-print("[pack-release] Created 3 UTF-8 ZIP archives cleanly.")
+static_zip = r"${path.join(dirZip, `TavernChat-v${version}-静态网页PWA包.zip`)}"
+with zipfile.ZipFile(static_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+    root_static = r"${dirStaticWeb}"
+    for dp, _, fns in os.walk(root_static):
+        for fn in fns:
+            fp = os.path.join(dp, fn)
+            zf.write(fp, arcname=os.path.relpath(fp, root_static))
+print("[pack-release] Created 4 UTF-8 ZIP archives cleanly.")
 `
 const zipRes = spawnSync('python', ['-c', zipPy], { stdio: 'inherit' })
 if ((zipRes.status ?? 1) !== 0) {
@@ -148,7 +179,9 @@ const readmeText = `TavernChat v${version} 分类发布包与永久网盘链接�
 4. 04-GitHub-Release上传文件/
    - 直接把该文件夹内 4 个文件（APK + latest.json + 两个 Windows EXE）拖拽进 GitHub Release 页面即可完成发布。
 5. 05-分类压缩包(ZIP)/
-   - 已用 UTF-8 打包好「安卓完整包」「Windows完整包」「全平台合集」三个单文件 ZIP。
+   - 已用 UTF-8 打包好「安卓完整包」「Windows完整包」「全平台合集」「静态网页PWA包」四个单文件 ZIP。
+6. 06-静态网页托管包(iOS与网页)/
+   - 纯静态站点文件（约 0.6 MB），直接拖入 Cloudflare Pages / 腾讯云 EdgeOne Pages / Vercel 即可生成 HTTPS 网址给 iPhone Safari「添加到主屏幕」免安装使用。
 
 二、如何在夸克 / 百度网盘保持「一致性永久链接」？
 - 建议在网盘根目录新建一个固定总文件夹（例如：TavernChat），把 01 / 02 / 03 这三个子文件夹（不要带版本号）传进去。

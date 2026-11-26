@@ -8,6 +8,42 @@
   background: var(--bg-base);
 }
 
+.iosPwaBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  flex-shrink: 0;
+}
+
+.iosPwaText {
+  flex: 1;
+  min-width: 0;
+}
+
+.iosPwaClose {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.iosPwaClose:hover {
+  background: var(--bg-hover);
+}
+
 .scrollArea {
   flex: 1;
   min-height: 0;

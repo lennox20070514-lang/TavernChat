@@ -5,6 +5,11 @@ import {
   type CharacterComponent,
   type ChatMessage,
 } from '@tavern-chat/core'
+import {
+  dismissIosTip,
+  getIosInstallContext,
+  isIosTipDismissed,
+} from '../../app/pwaInstall.ts'
 import { getActiveProvider, useSettings } from '../../services/settings.ts'
 import {
   getMessageSiblings,
@@ -74,6 +79,8 @@ export const ChatWorkspace = () => {
   const [modelPopOpen, setModelPopOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [searchMatchCursor, setSearchMatchCursor] = useState(0)
+  const [iosBannerHidden, setIosBannerHidden] = useState(() => isIosTipDismissed())
+  const iosInstallContext = getIosInstallContext()
   const [autoCountdown, setAutoCountdown] = useState<number | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -546,6 +553,27 @@ export const ChatWorkspace = () => {
           }
         }}
       />
+
+      {iosInstallContext !== 'none' && !iosBannerHidden ? (
+        <div className={styles.iosPwaBanner}>
+          <span className={styles.iosPwaText}>
+            {iosInstallContext === 'wechat_qq'
+              ? '微信/QQ 内浏览易清本地记录：请点右上角「… → 用默认浏览器(Safari)打开」后再添加到主屏幕。'
+              : 'iPhone 专属用法：点 Safari 底部「分享 ⬆︎」→「添加到主屏幕」，即可全屏像独立 App 一样使用且防丢记录。'}
+          </span>
+          <button
+            type="button"
+            className={styles.iosPwaClose}
+            aria-label="关闭苹果安装提示"
+            onClick={() => {
+              dismissIosTip()
+              setIosBannerHidden(true)
+            }}
+          >
+            <IconClose size={13} />
+          </button>
+        </div>
+      ) : null}
 
       {chatSearchOpen ? (
         <div className={styles.searchBarWrap}>

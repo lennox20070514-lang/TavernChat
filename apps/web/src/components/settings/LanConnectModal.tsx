@@ -43,6 +43,8 @@ export const LanConnectModal = () => {
 
   const platform = getHostPlatform()
   const isHostCapable = platform === 'android' || platform === 'desktop'
+  const isHttpsWeb =
+    typeof window !== 'undefined' && window.location.protocol === 'https:' && !isHostCapable
   const hostRunning = role === 'host' && hostStatus.running && Boolean(hostStatus.url)
   const isConnectedClient = role === 'client'
 
@@ -241,13 +243,29 @@ export const LanConnectModal = () => {
             <div className={styles.stepHeader}>
               <span className={styles.stepNum}>i</span>
               <div className={styles.stepInfo}>
-                <div className={styles.stepTitle}>如何在手机与电脑之间互通？</div>
+                <div className={styles.stepTitle}>
+                  {isHttpsWeb ? '静态网页版 / iPhone 如何互通数据？' : '如何在手机与电脑之间互通？'}
+                </div>
                 <div className={styles.stepDesc}>
-                  1. 请先确认手机和电脑连在同一个 Wi-Fi / 局域网。
-                  <br />
-                  2. 在安卓手机版（或电脑客户端）点开左侧「多设备连接」→ 点击「启动连接」。
-                  <br />
-                  3. 复制手机上给出的网址，直接粘贴到电脑浏览器地址栏打开即可开始使用并自动同步数据。
+                  {isHttpsWeb ? (
+                    <>
+                      1. 当前访问的是 HTTPS 加密静态网页，苹果和浏览器出于安全策略不允许直接请求局域网{' '}
+                      <code>http://192.168.x.x</code> 地址。
+                      <br />
+                      2. 若要从手机/电脑把卡片带到这里（或备份导出），推荐到「设置 → 数据与导入 → 导出全量 JSON 备份」，直接用文件或隔空投送（AirDrop）互传导入。
+                      <br />
+                      3. 若在同一 Wi-Fi 下使用，也可直接在 Safari 地址栏输入电脑端/安卓端开启连接后显示的{' '}
+                      <code>http://</code> 局域网网址实时同步。
+                    </>
+                  ) : (
+                    <>
+                      1. 请先确认手机和电脑连在同一个 Wi-Fi / 局域网。
+                      <br />
+                      2. 在安卓手机版（或电脑客户端）点开左侧「多设备连接」→ 点击「启动连接」。
+                      <br />
+                      3. 复制手机上给出的网址，直接粘贴到电脑浏览器地址栏打开即可开始使用并自动同步数据。
+                    </>
+                  )}
                 </div>
               </div>
             </div>

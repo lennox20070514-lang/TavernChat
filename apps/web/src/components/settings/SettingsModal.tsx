@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core'
 import clsx from 'clsx'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -199,6 +200,24 @@ export const SettingsModal = () => {
   }
 
   const iosContext = getIosInstallContext()
+  const isStaticWeb = !Capacitor.isNativePlatform() && !(typeof window !== 'undefined' && window.tavernDesktop?.isDesktop)
+
+  const handleRefreshStaticWeb = async () => {
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations()
+        await Promise.all(regs.map((reg) => reg.update().catch(() => undefined)))
+      }
+      if ('caches' in window) {
+        const keys = await caches.keys()
+        await Promise.all(keys.map((k) => caches.delete(k).catch(() => undefined)))
+      }
+      showToast('已拉取最新静态网页资源，正在刷新页面…', 'success')
+      window.setTimeout(() => window.location.reload(), 450)
+    } catch {
+      window.location.reload()
+    }
+  }
   const needsBackupReminder =
     lastBackupAt === null || Date.now() - lastBackupAt > 7 * 24 * 60 * 60 * 1000
   const keyGuide = getKeyGuide(active)
@@ -886,65 +905,86 @@ export const SettingsModal = () => {
                   <div>
                     <div className={styles.sectionTitle}>应用版本与更新</div>
                     <div className={styles.hint}>
-                      当前版本：v{CURRENT_APP_VERSION}（Build {CURRENT_ANDROID_VERSION_CODE}）
+                      当前版本：v{CURRENT_APP_VERSION}
+                      {isStaticWeb ? '（网页 / iOS PWA 版）' : `（Build ${CURRENT_ANDROID_VERSION_CODE}）`}
                     </div>
                   </div>
                 </div>
 
-                {availableUpdate ? (
-                  <div className={styles.updateHighlight}>
-                    <div className={styles.updateHighlightBody}>
-                      <strong>发现新版本 v{availableUpdate.manifest.version}</strong>
-                      <span className={styles.hint}>
-                        {availableUpdate.viaMirror
-                          ? '已通过国内镜像加速线路就绪，可直连下载安装包。'
-                          : '发现新版本，点击即可查看更新日志并下载安装包。'}
-                      </span>
+                {isStaticWeb ? (
+                  <>
+                    <div className={styles.hint}>
+                      你正在使用静态网页 / iOS PWA 版本，每次重新打开页面会自动同步最新前端资源，无需手动下载安装包。
                     </div>
-                    <button
-                      type="button"
-                      className={clsx(styles.btn, styles.btnPrimary)}
-                      onClick={() => {
-                        openUpdatePrompt(availableUpdate)
-                        setOpen(false)
-                      }}
-                    >
-                      <IconDownload size={14} />
-                      <span>查看详情并更新</span>
-                    </button>
-                  </div>
-                ) : null}
+                    <div className={styles.row}>
+                      <button
+                        type="button"
+                        className={clsx(styles.btn, styles.btnPrimary)}
+                        onClick={() => void handleRefreshStaticWeb()}
+                      >
+                        <IconRefresh size={14} />
+                        <span>立即清理缓存并刷新最新版</span>
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {availableUpdate ? (
+                      <div className={styles.updateHighlight}>
+                        <div className={styles.updateHighlightBody}>
+                          <strong>发现新版本 v{availableUpdate.manifest.version}</strong>
+                          <span className={styles.hint}>
+                            {availableUpdate.viaMirror
+                              ? '已通过国内镜像加速线路就绪，可直连下载安装包。'
+                              : '发现新版本，点击即可查看更新日志并下载安装包。'}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className={clsx(styles.btn, styles.btnPrimary)}
+                          onClick={() => {
+                            openUpdatePrompt(availableUpdate)
+                            setOpen(false)
+                          }}
+                        >
+                          <IconDownload size={14} />
+                          <span>查看详情并更新</span>
+                        </button>
+                      </div>
+                    ) : null}
 
-                {updateError ? (
-                  <div className={styles.hint}>最近一次检查遇到网络问题：{updateError}</div>
-                ) : null}
+                    {updateError ? (
+                      <div className={styles.hint}>最近一次检查遇到网络问题：{updateError}</div>
+                    ) : null}
 
-                <div className={styles.row}>
-                  <button
-                    type="button"
-                    className={clsx(styles.btn, styles.btnPrimary)}
-                    disabled={checkingUpdate}
-                    onClick={async () => {
-                      const outcome = await checkForUpdates({ force: true, silent: false })
-                      if (outcome.status === 'unconfigured') {
-                        showToast('当前为测试构建版，官方发布通道接入后即可自动检查更新', 'info')
-                      } else if (outcome.status === 'latest') {
-                        showToast(`当前已是最新版本 v${outcome.version}`, 'success')
-                      } else if (outcome.status === 'error') {
-                        showToast('检查更新失败：' + outcome.message, 'error')
-                      } else if (outcome.status === 'update') {
-                        setOpen(false)
-                      }
-                    }}
-                  >
-                    <IconRefresh size={14} />
-                    <span>{checkingUpdate ? '正在检查…' : '立即检查更新'}</span>
-                  </button>
-                </div>
+                    <div className={styles.row}>
+                      <button
+                        type="button"
+                        className={clsx(styles.btn, styles.btnPrimary)}
+                        disabled={checkingUpdate}
+                        onClick={async () => {
+                          const outcome = await checkForUpdates({ force: true, silent: false })
+                          if (outcome.status === 'unconfigured') {
+                            showToast('当前为测试构建版，官方发布通道接入后即可自动检查更新', 'info')
+                          } else if (outcome.status === 'latest') {
+                            showToast(`当前已是最新版本 v${outcome.version}`, 'success')
+                          } else if (outcome.status === 'error') {
+                            showToast('检查更新失败：' + outcome.message, 'error')
+                          } else if (outcome.status === 'update') {
+                            setOpen(false)
+                          }
+                        }}
+                      >
+                        <IconRefresh size={14} />
+                        <span>{checkingUpdate ? '正在检查…' : '立即检查更新'}</span>
+                      </button>
+                    </div>
 
-                <div className={styles.hint}>
-                  打开应用时会自动在后台检测新版本，发现更新会弹窗提醒并自动优先走国内加速下载线路。
-                </div>
+                    <div className={styles.hint}>
+                      打开应用时会自动在后台检测新版本，发现更新会弹窗提醒并自动优先走国内加速下载线路。
+                    </div>
+                  </>
+                )}
               </div>
             </>
           ) : null}

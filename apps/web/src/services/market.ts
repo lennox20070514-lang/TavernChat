@@ -235,7 +235,7 @@ const directGet = async (url: string, mode: FetchMode): Promise<string | Uint8Ar
     const response = await fetch(url, {
       headers: { Accept: acceptFor(mode) },
       signal: timeout.signal,
-      redirect: 'error',
+      redirect: 'follow',
     })
     if (!response.ok) throw new Error('来源返回 HTTP ' + response.status)
     return mode === 'bytes' ? new Uint8Array(await response.arrayBuffer()) : response.text()
